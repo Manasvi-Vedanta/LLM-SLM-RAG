@@ -1,0 +1,19 @@
+# Self-Correcting RAG System – Python dependencies
+# Install with:  pip install -r requirements.txt
+
+# --- Core LangChain ecosystem ---
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-huggingface>=0.1.0
+
+# --- PDF parsing ---
+pypdf>=4.0.0
+
+# --- Vector store ---
+faiss-cpu>=1.7.4
+
+# --- Embeddings (local, free) ---
+sentence-transformers>=3.0.0
+
+# --- LLM backend (Gemini) ---
+google-generativeai>=0.8.0

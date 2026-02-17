@@ -1,0 +1,22 @@
+# Environment variables
+.env
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# VS Code
+.vscode/
+
+# Vector Store (regeneratable)
+vectorstore/
+
+# OS specific
+.DS_Store
+Thumbs.db
