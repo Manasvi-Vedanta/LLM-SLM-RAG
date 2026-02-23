@@ -17,6 +17,9 @@ env/
 # Vector Store (regeneratable)
 vectorstore/
 
+# SQLite database (local user data)
+users.db
+
 # OS specific
 .DS_Store
 Thumbs.db

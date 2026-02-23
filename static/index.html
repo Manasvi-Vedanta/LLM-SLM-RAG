@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG System – Self-Correcting AI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+    <!-- Three.js background -->
+    <div id="three-canvas"></div>
+
+    <!-- Navbar -->
+    <nav class="navbar">
+        <a href="/" class="navbar-brand">
+            <span class="brand-icon">⚡</span>
+            RAG System
+        </a>
+        <div class="navbar-links" id="nav-links">
+            <a href="#features">Features</a>
+            <a href="/login" class="btn btn-ghost" id="nav-login">Log In</a>
+            <a href="/signup" class="btn btn-primary" id="nav-signup">Get Started</a>
+            <!-- Shown when logged in -->
+            <a href="/chat" class="btn btn-primary" id="nav-chat" style="display:none;">Open Chat</a>
+            <a href="#" class="btn btn-ghost" id="nav-logout" style="display:none;">Log Out</a>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="hero-badge">
+            ✦ Actor-Critic Architecture
+        </div>
+        <h1>Self-Correcting<br>RAG System</h1>
+        <p>
+            Ask questions about your documents with AI-powered retrieval and
+            automatic validation. Built with FAISS, BGE embeddings, and Gemini.
+        </p>
+        <div class="hero-buttons">
+            <a href="/signup" class="btn btn-primary" id="hero-cta">Get Started Free</a>
+            <a href="#features" class="btn btn-secondary">Learn More</a>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section class="features" id="features">
+        <h2>How It Works</h2>
+        <div class="features-grid">
+            <div class="feature-card glass-card">
+                <div class="feature-icon">📄</div>
+                <h3>Document Ingestion</h3>
+                <p>Upload PDFs and the system automatically chunks, embeds, and indexes them using BGE-base (768-dim) embeddings for high-accuracy retrieval.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="feature-icon">🔍</div>
+                <h3>Smart Retrieval (Actor)</h3>
+                <p>FAISS vector search finds the most relevant document chunks for your query. A similarity scope gate filters out irrelevant questions instantly.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="feature-icon">🧠</div>
+                <h3>AI Validation (Critic)</h3>
+                <p>Gemini LLM validates whether the retrieved text actually answers your question. Low-confidence results trigger a fallback from general knowledge.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="feature-icon">🔄</div>
+                <h3>Self-Correcting Loop</h3>
+                <p>The Actor-Critic architecture ensures you always get the best possible answer — from documents when available, from AI knowledge when not.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="feature-icon">💬</div>
+                <h3>Interactive Chat</h3>
+                <p>A clean, real-time chatbot interface with source attribution, confidence scores, and full conversation history.</p>
+            </div>
+            <div class="feature-card glass-card">
+                <div class="feature-icon">🔒</div>
+                <h3>Secure Access</h3>
+                <p>JWT-based authentication keeps your queries private. Each user gets their own chat history stored securely.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>Self-Correcting RAG System &middot; Actor-Critic Architecture &middot; Built with FastAPI, FAISS & Gemini</p>
+    </footer>
+
+    <script type="module">
+        import { initBackground } from '/static/js/background.js';
+        import { isAuthenticated, logout } from '/static/js/auth.js';
+
+        initBackground();
+
+        // Update navbar based on auth state
+        if (isAuthenticated()) {
+            document.getElementById('nav-login').style.display = 'none';
+            document.getElementById('nav-signup').style.display = 'none';
+            document.getElementById('nav-chat').style.display = '';
+            document.getElementById('nav-logout').style.display = '';
+            document.getElementById('hero-cta').textContent = 'Open Chat';
+            document.getElementById('hero-cta').href = '/chat';
+        }
+
+        document.getElementById('nav-logout')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            logout();
+        });
+    </script>
+</body>
+</html>

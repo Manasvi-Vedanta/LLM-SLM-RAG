@@ -17,3 +17,11 @@ sentence-transformers>=3.0.0
 
 # --- LLM backend (Gemini) ---
 google-generativeai>=0.8.0
+
+# --- Web UI (FastAPI) ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.0
+python-multipart>=0.0.9
+pydantic[email]>=2.0.0

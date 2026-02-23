@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat – RAG System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+    <div id="three-canvas"></div>
+
+    <!-- Chat Container -->
+    <div class="chat-container">
+
+        <!-- Header -->
+        <div class="chat-header">
+            <div class="chat-header-left">
+                <a href="/" class="navbar-brand">
+                    <span class="brand-icon">⚡</span>
+                    RAG System
+                </a>
+                <div class="chat-status">
+                    <span class="status-dot"></span>
+                    <span>Online</span>
+                </div>
+            </div>
+            <div class="chat-user-info">
+                <span id="username-display" style="font-size:0.85rem; color:var(--text-secondary);"></span>
+                <div class="user-avatar" id="user-avatar"></div>
+                <button class="btn btn-ghost" id="logout-btn" style="font-size:0.8rem;">Log Out</button>
+            </div>
+        </div>
+
+        <!-- Messages -->
+        <div class="chat-messages" id="chat-messages">
+            <div class="welcome-message" id="welcome">
+                <h3>Hello! 👋</h3>
+                <p>Ask me anything about your uploaded documents. I'll retrieve the most relevant information and validate it for accuracy.</p>
+                <div class="suggestion-chips">
+                    <button class="suggestion-chip" data-q="What are pandas in Python?">What are pandas in Python?</button>
+                    <button class="suggestion-chip" data-q="Explain data science principles">Explain data science principles</button>
+                    <button class="suggestion-chip" data-q="What is machine learning?">What is machine learning?</button>
+                    <button class="suggestion-chip" data-q="How do Python lists work?">How do Python lists work?</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input -->
+        <div class="chat-input-area">
+            <div class="chat-input-wrapper">
+                <input type="text"
+                       class="chat-input"
+                       id="chat-input"
+                       placeholder="Ask a question about your documents..."
+                       autocomplete="off"
+                       maxlength="2000">
+                <button class="chat-send-btn" id="send-btn" title="Send">
+                    ➤
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initBackground } from '/static/js/background.js';
+        import { requireAuth, getUser, logout, authFetch } from '/static/js/auth.js';
+
+        initBackground();
+
+        // ── Auth guard ──────────────────────────────────────────────
+        if (!requireAuth()) throw new Error('redirect');
+
+        const user = getUser();
+        document.getElementById('username-display').textContent = user?.username || '';
+        document.getElementById('user-avatar').textContent = (user?.username || '?')[0].toUpperCase();
+
+        document.getElementById('logout-btn').addEventListener('click', () => logout());
+
+        // ── DOM refs ────────────────────────────────────────────────
+        const messagesEl = document.getElementById('chat-messages');
+        const inputEl = document.getElementById('chat-input');
+        const sendBtn = document.getElementById('send-btn');
+        const welcomeEl = document.getElementById('welcome');
+
+        let isSending = false;
+
+        // ── Send message ────────────────────────────────────────────
+        async function sendMessage(question) {
+            if (!question || isSending) return;
+            isSending = true;
+            sendBtn.disabled = true;
+
+            // Hide welcome
+            if (welcomeEl) welcomeEl.style.display = 'none';
+
+            // Add user message
+            appendMessage('user', question);
+            inputEl.value = '';
+
+            // Show typing indicator
+            const typingEl = showTyping();
+
+            try {
+                const res = await authFetch('/api/chat', {
+                    method: 'POST',
+                    body: JSON.stringify({ question }),
+                });
+                const data = await res.json();
+
+                removeTyping(typingEl);
+
+                if (!res.ok) {
+                    appendMessage('bot', `Error: ${data.detail || 'Something went wrong'}`, 'error');
+                } else {
+                    appendMessage('bot', data.answer, data.source, data.metadata);
+                }
+            } catch (err) {
+                removeTyping(typingEl);
+                appendMessage('bot', `Error: ${err.message}`, 'error');
+            }
+
+            isSending = false;
+            sendBtn.disabled = false;
+            inputEl.focus();
+        }
+
+        // ── Append a chat bubble ────────────────────────────────────
+        function appendMessage(role, text, source = '', metadata = {}) {
+            const wrapper = document.createElement('div');
+            wrapper.className = `message ${role}`;
+
+            const label = document.createElement('div');
+            label.className = 'message-label';
+            label.textContent = role === 'user' ? 'You' : 'RAG System';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+            bubble.textContent = text;
+
+            wrapper.appendChild(label);
+            wrapper.appendChild(bubble);
+
+            // Source badge for bot messages
+            if (role === 'bot' && source && source !== 'error') {
+                const meta = document.createElement('div');
+                meta.className = 'message-meta';
+
+                const badge = document.createElement('span');
+                badge.className = `source-badge ${source}`;
+                const sourceLabels = {
+                    document: '📄 Document',
+                    general_knowledge: '🧠 General Knowledge',
+                    out_of_scope: '⛔ Out of Scope',
+                };
+                badge.textContent = sourceLabels[source] || source;
+                meta.appendChild(badge);
+
+                if (metadata.similarity_score !== undefined) {
+                    const sim = document.createElement('span');
+                    sim.textContent = `Similarity: ${(metadata.similarity_score * 100).toFixed(1)}%`;
+                    meta.appendChild(sim);
+                }
+                if (metadata.confidence !== undefined) {
+                    const conf = document.createElement('span');
+                    conf.textContent = `Confidence: ${metadata.confidence.toFixed(1)}%`;
+                    meta.appendChild(conf);
+                }
+                if (metadata.source_file) {
+                    const src = document.createElement('span');
+                    src.textContent = `Source: ${metadata.source_file}`;
+                    meta.appendChild(src);
+                }
+
+                wrapper.appendChild(meta);
+            }
+
+            messagesEl.appendChild(wrapper);
+            scrollToBottom();
+        }
+
+        // ── Typing indicator ────────────────────────────────────────
+        function showTyping() {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message bot';
+            wrapper.id = 'typing-msg';
+
+            const label = document.createElement('div');
+            label.className = 'message-label';
+            label.textContent = 'RAG System';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+
+            const indicator = document.createElement('div');
+            indicator.className = 'typing-indicator';
+            indicator.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
+
+            bubble.appendChild(indicator);
+            wrapper.appendChild(label);
+            wrapper.appendChild(bubble);
+            messagesEl.appendChild(wrapper);
+            scrollToBottom();
+            return wrapper;
+        }
+
+        function removeTyping(el) {
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+        }
+
+        function scrollToBottom() {
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        // ── Event listeners ─────────────────────────────────────────
+        sendBtn.addEventListener('click', () => {
+            sendMessage(inputEl.value.trim());
+        });
+
+        inputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage(inputEl.value.trim());
+            }
+        });
+
+        // Suggestion chips
+        document.querySelectorAll('.suggestion-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                sendMessage(chip.dataset.q);
+            });
+        });
+
+        // ── Load chat history ───────────────────────────────────────
+        async function loadHistory() {
+            try {
+                const res = await authFetch('/api/chat/history');
+                const data = await res.json();
+                if (data.history && data.history.length > 0) {
+                    welcomeEl.style.display = 'none';
+                    // Show in chronological order (API returns newest first)
+                    const sorted = data.history.reverse();
+                    sorted.forEach(item => {
+                        appendMessage('user', item.question);
+                        let meta = {};
+                        try { meta = JSON.parse(item.metadata || '{}'); } catch {}
+                        appendMessage('bot', item.answer, item.source, meta);
+                    });
+                }
+            } catch (err) {
+                console.warn('Could not load history:', err);
+            }
+        }
+
+        loadHistory();
+        inputEl.focus();
+    </script>
+</body>
+</html>
