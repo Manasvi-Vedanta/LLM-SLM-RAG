@@ -1,96 +1,103 @@
 # Self-Correcting RAG System (Actor-Critic)
 
-A production-style Retrieval-Augmented Generation (RAG) project that answers questions from your PDF documents, then self-validates the retrieved context using a Critic LLM.
-
-If retrieval is weak, the system returns **Out of Scope**.
-If retrieval is good but confidence is low, the Critic generates a fallback answer from general knowledge.
+A full-stack Retrieval-Augmented Generation system that answers questions from PDF documents, validates answers using a Critic LLM, and serves everything through a professional web interface with user authentication.
 
 ---
 
-## What this project does
+## Key Features
 
-This system combines:
-
-- **Actor (Retriever):** FAISS + local sentence-transformer embeddings
-- **Critic (Validator):** Gemini model that scores whether the retrieved excerpt actually answers the question
-- **Gating logic:** Similarity and confidence thresholds to make behavior explicit and controllable
-
-Core behavior:
-
-1. Retrieve top-k chunks from indexed PDFs.
-2. If best similarity is below threshold → return **Out of Scope**.
-3. Else ask Critic to validate relevance and sufficiency.
-4. If confidence is high → return exact document excerpt.
-5. If confidence is low → return fallback answer from Critic general knowledge.
+- **Actor-Critic RAG pipeline** — retrieves document chunks, then validates them with an LLM before responding
+- **Three answer modes** — exact document excerpt, general-knowledge fallback, or out-of-scope rejection
+- **Web UI** — dark-themed glassmorphism design with Three.js animated particle background
+- **Authentication** — JWT-based signup/login with bcrypt password hashing and per-user chat history
+- **Two interfaces** — browser-based chatbot (FastAPI) and terminal CLI
+- **Configurable** — all thresholds, models, and chunk parameters in one config file
 
 ---
 
 ## Architecture
 
-### 1) Ingestion (`ingestion.py`)
+```
+  User Question
+       │
+       ▼
+  ┌─────────────┐     top-k chunks     ┌──────────────┐
+  │  FAISS Actor │ ──────────────────►  │  Scope Gate  │
+  │  (Retriever) │                      │  sim < 0.20? │
+  └─────────────┘                      └──────┬───────┘
+                                              │
+                              ┌───────────────┴───────────────┐
+                              ▼                               ▼
+                        Out of Scope                  ┌──────────────┐
+                                                      │ Gemini Critic│
+                                                      │  (Validator) │
+                                                      └──────┬───────┘
+                                                             │
+                                              ┌──────────────┴──────────────┐
+                                              ▼                             ▼
+                                     confidence ≥ 85%              confidence < 85%
+                                     Return document               LLM fallback
+                                     excerpt verbatim              from general knowledge
+```
 
-- Discovers PDF files inside `Dataset/`
-- Loads pages using `PyPDFLoader`
-- Splits pages into overlapping chunks using `RecursiveCharacterTextSplitter`
-- Preserves metadata (`source`, `page`)
+### Module Breakdown
 
-### 2) Vector Store / Actor (`vector_store.py`)
+| Module | Role |
+|---|---|
+| `ingestion.py` | Discovers PDFs in `Dataset/`, loads pages with PyPDFLoader, splits into overlapping chunks |
+| `vector_store.py` | Embeds chunks with BGE-base-en-v1.5 (768d), builds/loads FAISS index, applies scope gate |
+| `critic.py` | GeminiCritic validates excerpts, scores confidence, generates fallback answers; includes rate-limit retry |
+| `pipeline.py` | Orchestrates Actor → Scope Gate → Critic → Confidence Gate flow |
+| `server.py` | FastAPI backend — auth endpoints, chat API, static file serving, pipeline startup |
+| `auth.py` | JWT token creation/verification, bcrypt password hashing |
+| `database.py` | SQLite user store + chat history persistence |
+| `main.py` | Terminal CLI with interactive loop (alternative to web UI) |
+| `config.py` | All tuneable parameters in one place |
 
-- Embeds chunks with `BAAI/bge-base-en-v1.5` (768 dimensions)
-- Uses normalized embeddings and FAISS local persistence (`vectorstore/`)
-- Applies query instruction prefix for BGE models:
-  - `Represent this sentence for searching relevant passages:`
-- Retrieves top-k and converts L2 distance to cosine similarity:
+### Frontend
 
-\[
-\text{cosine\_sim} = 1 - \frac{L2^2}{2}
-\]
-
-### 3) Critic (`critic.py`)
-
-- `GeminiCritic` validates whether excerpt answers question
-- Returns structured confidence + explanation
-- Includes retry/backoff for Gemini rate-limit (`429 ResourceExhausted`)
-- `MockCritic` available for offline/testing mode
-
-### 4) Pipeline Orchestrator (`pipeline.py`)
-
-Implements Actor-Critic loop with two gates:
-
-- **Scope Gate:** similarity threshold
-- **Confidence Gate:** critic confidence threshold
-
-Outputs one of:
-
-- `document`
-- `general_knowledge`
-- `out_of_scope`
-
-### 5) CLI Entry (`main.py`)
-
-- Interactive question-answer loop
-- Auto-builds vector index on first run
-- Supports force rebuild and mock mode
-- Handles Windows console Unicode safely (UTF-8 wrapping)
+| File | Purpose |
+|---|---|
+| `static/index.html` | Landing page with feature cards and hero section |
+| `static/login.html` | Login form with validation and error display |
+| `static/signup.html` | Registration form with password confirmation |
+| `static/chat.html` | Chatbot interface with typing indicators, source badges, suggestion chips, chat history |
+| `static/js/background.js` | Three.js particle network — 200 particles with connecting lines, mouse-reactive camera, pulsing glow sphere |
+| `static/js/auth.js` | Token management, authenticated fetch wrapper, route guards |
+| `static/css/style.css` | Dark theme with CSS variables, glassmorphism cards, responsive layout, animations |
 
 ---
 
-## Project structure
+## Project Structure
 
 ```text
 Code/
 ├─ Dataset/
 │  ├─ Principles-of-Data-Science-WEB.pdf
 │  └─ Introduction_to_Python_Programming_-_WEB.pdf
-├─ vectorstore/                  # generated FAISS index (ignored in git)
+├─ static/
+│  ├─ css/
+│  │  └─ style.css
+│  ├─ js/
+│  │  ├─ auth.js
+│  │  └─ background.js
+│  ├─ index.html
+│  ├─ login.html
+│  ├─ signup.html
+│  └─ chat.html
+├─ vectorstore/          # generated FAISS index (gitignored)
+├─ users.db              # SQLite user database (gitignored)
 ├─ config.py
 ├─ ingestion.py
 ├─ vector_store.py
 ├─ critic.py
 ├─ pipeline.py
+├─ server.py
+├─ auth.py
+├─ database.py
 ├─ main.py
 ├─ requirements.txt
-├─ .env                          # local secrets (ignored in git)
+├─ .env                  # API keys (gitignored)
 └─ README.md
 ```
 
@@ -100,34 +107,28 @@ Code/
 
 - Python 3.10+
 - Windows / Linux / macOS
-- Internet access (only for Gemini critic calls)
-
-Python dependencies are in `requirements.txt`.
+- Internet access (for Gemini API calls)
 
 ---
 
 ## Setup
 
-### 1) Clone repository
+### 1) Clone
 
 ```bash
 git clone https://github.com/Manasvi-Vedanta/LLM-SLM-RAG.git
 cd LLM-SLM-RAG
 ```
 
-### 2) Create virtual environment
-
-**Windows (PowerShell):**
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-**Linux/macOS:**
+### 2) Virtual environment
 
 ```bash
 python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# Linux / macOS
 source .venv/bin/activate
 ```
 
@@ -137,133 +138,162 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4) Add Gemini API key
+### 4) Configure API key
 
-Create `.env` in project root:
+Create a `.env` file in the project root:
 
 ```env
-GEMINI_API_KEY=your_real_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+---
+
+## Run
+
+### Web UI (recommended)
+
+```bash
+uvicorn server:app --host 127.0.0.1 --port 8000
+```
+
+Then open **http://127.0.0.1:8000** in your browser.
+
+- **/** — Landing page
+- **/signup** — Create an account
+- **/login** — Sign in
+- **/chat** — Chatbot (requires login)
+
+### CLI mode
+
+```bash
+python main.py               # interactive terminal loop
+python main.py --rebuild     # force-rebuild the FAISS index
+python main.py --mock        # use MockCritic (no API key needed)
+python main.py --threshold 0.25 --confidence 90   # override gates
 ```
 
 ---
 
 ## Configuration
 
-All key knobs are in `config.py`:
+All parameters live in `config.py`:
 
-- `CHUNK_SIZE = 1000`
-- `CHUNK_OVERLAP = 200`
-- `EMBEDDING_MODEL_NAME = "BAAI/bge-base-en-v1.5"`
-- `TOP_K = 5`
-- `SIMILARITY_THRESHOLD = 0.20`
-- `CONFIDENCE_THRESHOLD = 85`
-- `GEMINI_MODEL_NAME = "gemini-2.5-flash"`
+| Parameter | Default | Description |
+|---|---|---|
+| `CHUNK_SIZE` | 1000 | Characters per document chunk |
+| `CHUNK_OVERLAP` | 200 | Overlap between consecutive chunks |
+| `EMBEDDING_MODEL_NAME` | `BAAI/bge-base-en-v1.5` | Sentence-transformer model (768 dims) |
+| `TOP_K` | 5 | Number of chunks to retrieve |
+| `SIMILARITY_THRESHOLD` | 0.20 | Cosine similarity floor for scope gate |
+| `CONFIDENCE_THRESHOLD` | 85 | Critic confidence floor (0–100) |
+| `GEMINI_MODEL_NAME` | `gemini-2.5-flash` | LLM used for critic validation |
 
-Tuning tips:
-
-- Increase `TOP_K` if answers seem incomplete.
-- Lower `SIMILARITY_THRESHOLD` if many relevant questions become out-of-scope.
-- Increase `CONFIDENCE_THRESHOLD` for stricter document-only behavior.
-
----
-
-## Run
-
-### Default interactive mode
-
-```bash
-python main.py
-```
-
-### Force rebuild index
-
-```bash
-python main.py --rebuild
-```
-
-### Offline/mock critic mode
-
-```bash
-python main.py --mock
-```
-
-### Override thresholds from CLI
-
-```bash
-python main.py --threshold 0.25 --confidence 90
-```
+**Tuning tips:**
+- Lower `SIMILARITY_THRESHOLD` if relevant questions are marked out-of-scope
+- Increase `CONFIDENCE_THRESHOLD` for stricter document-only answers
+- Increase `TOP_K` if answers seem incomplete
 
 ---
 
-## How answers are decided
+## How Answers Are Decided
 
-For each question:
+1. **Actor** retrieves top-k document chunks for the query
+2. **Scope Gate** — if best cosine similarity < threshold → **Out of Scope**
+3. **Critic** — Gemini validates whether the excerpt answers the question (returns confidence 0–100)
+4. **Confidence Gate**:
+   - ≥ threshold → return **exact document excerpt** with source file, page, and scores
+   - < threshold → return **general-knowledge fallback** generated by the Critic
 
-1. Actor retrieves chunk candidates.
-2. If best similarity < threshold:
-   - returns: `Out of Scope. The provided documents do not contain information relevant to your question.`
-3. If in scope:
-   - Critic validates excerpt.
-4. If confidence ≥ confidence threshold:
-   - returns exact document excerpt and metadata.
-5. Else:
-   - returns general-knowledge fallback answer.
+The cosine similarity is computed from FAISS L2 distances on unit-normalised embeddings:
+
+$$\text{cosine\_sim} = 1 - \frac{L2^2}{2}$$
 
 ---
 
-## Example output modes
+## Web UI Features
 
-- **[ANSWER FROM DOCUMENT]**
-  - shows source file, page, similarity, confidence
-- **[ANSWER FROM GENERAL KNOWLEDGE]**
-  - when document is insufficient
-- **[OUT OF SCOPE]**
-  - when retrieval similarity is too low
+### Landing Page
+- Three.js animated particle network background (200 particles with dynamic connections)
+- Mouse-reactive camera movement and pulsing central glow
+- Feature cards explaining the system architecture
+
+### Authentication
+- JWT tokens stored in localStorage (24-hour expiry)
+- bcrypt password hashing
+- Route guards redirect unauthenticated users to login
+
+### Chatbot
+- Real-time question/answer with typing animation
+- Source badges: **Document** (green), **General Knowledge** (amber), **Out of Scope** (red)
+- Similarity and confidence scores displayed per answer
+- Suggestion chips for quick starter questions
+- Persistent chat history per user (SQLite)
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `POST` | `/api/auth/signup` | No | Register a new user |
+| `POST` | `/api/auth/login` | No | Authenticate and receive JWT |
+| `GET` | `/api/auth/me` | Yes | Get current user info |
+| `POST` | `/api/chat` | Yes | Send a question to the RAG pipeline |
+| `GET` | `/api/chat/history` | Yes | Retrieve user's chat history |
+| `GET` | `/api/health` | No | Server and pipeline status |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Embeddings | BAAI/bge-base-en-v1.5 via SentenceTransformers |
+| Vector Store | FAISS (L2 index, local persistence) |
+| LLM Critic | Google Gemini 2.5 Flash |
+| PDF Parsing | PyPDFLoader (LangChain) |
+| Chunking | RecursiveCharacterTextSplitter |
+| Backend | FastAPI + Uvicorn |
+| Auth | JWT (python-jose) + bcrypt |
+| Database | SQLite |
+| Frontend | HTML/CSS/JS, Three.js (ES modules via CDN) |
+| CLI | argparse |
 
 ---
 
 ## Troubleshooting
 
-### 1) `No PDF files found`
-
-Place `.pdf` files inside `Dataset/`.
-
-### 2) Gemini rate limit (429 / ResourceExhausted)
-
-Handled automatically with retry/backoff in `GeminiCritic`.
-If limits persist, wait and retry.
-
-### 3) Windows Unicode / encoding crashes
-
-`main.py` wraps stdout/stderr in UTF-8 to prevent common `cp1252` errors.
-
-### 4) Wrong or weak retrieval
-
-- Rebuild index: `python main.py --rebuild`
-- Verify embedding model in `config.py`
-- Tune `SIMILARITY_THRESHOLD`
-- Ensure source PDFs have relevant content
+| Problem | Solution |
+|---|---|
+| `No PDF files found` | Place `.pdf` files inside `Dataset/` |
+| Gemini 429 / ResourceExhausted | Automatic retry/backoff is built in; wait if persistent |
+| Windows encoding crash | `server.py` and `main.py` wrap stdout in UTF-8 |
+| Weak retrieval scores | Run `python main.py --rebuild` or tune `SIMILARITY_THRESHOLD` |
+| Auth errors / expired token | Log out and log back in; tokens expire after 24 hours |
+| Port 8000 in use | Change port: `uvicorn server:app --port 8001` |
 
 ---
 
-## Security and repository hygiene
+## Security
 
-- `.env` is gitignored and should never be committed.
-- `vectorstore/` is generated and gitignored.
-- Keep API keys local only.
+- `.env` is gitignored — API keys never reach the repository
+- `users.db` is gitignored — user data stays local
+- `vectorstore/` is gitignored — regeneratable from source PDFs
+- Passwords are hashed with bcrypt (never stored in plain text)
+- JWT tokens are signed with a configurable secret key
 
 ---
 
-## Future improvements
+## Future Improvements
 
-- Add web UI (FastAPI/Streamlit)
-- Add citation highlighting at chunk level
-- Add evaluation suite and benchmark queries
-- Add support for DOCX/HTML/Markdown ingestion
+- Citation highlighting at chunk level
+- Evaluation suite and benchmark queries
+- Support for DOCX / HTML / Markdown ingestion
+- WebSocket streaming for real-time token-by-token responses
+- User file upload through the web UI
 
 ---
 
 ## License
 
-No license file is included yet.
-Add a `LICENSE` file before open-source distribution.
+No license file is included yet. Add a `LICENSE` file before open-source distribution.
