@@ -1,8 +1,9 @@
 /**
- * background.js – Three.js animated particle network background
- * ──────────────────────────────────────────────────────────────
- * Creates a floating particle field with connecting lines.
- * Imported by every page for a cohesive visual identity.
+ * background.js – Three.js animated gradient mesh background
+ * ───────────────────────────────────────────────────────────
+ * Creates a smooth, organic undulating surface with subtle color
+ * gradients that react gently to mouse movement. Professional and
+ * seamless — no disconnected particles, no visual noise.
  */
 
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
@@ -11,15 +12,17 @@ export function initBackground(canvasId = 'three-canvas') {
     const container = document.getElementById(canvasId);
     if (!container) return;
 
-    // ── Scene setup ────────────────────────────────────────────────
+    // ── Scene ──────────────────────────────────────────────────────
     const scene = new THREE.Scene();
+
     const camera = new THREE.PerspectiveCamera(
-        60,
+        45,
         window.innerWidth / window.innerHeight,
         0.1,
-        1000
+        500
     );
-    camera.position.z = 50;
+    camera.position.set(0, 20, 50);
+    camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -27,86 +30,91 @@ export function initBackground(canvasId = 'three-canvas') {
     renderer.setClearColor(0x000000, 0);
     container.appendChild(renderer.domElement);
 
-    // ── Particles ──────────────────────────────────────────────────
-    const PARTICLE_COUNT = 200;
-    const FIELD_SIZE = 80;
+    // ── Colour palette ─────────────────────────────────────────────
+    const COL_DEEP    = new THREE.Color(0x0a0a1a);  // near-black blue
+    const COL_ACCENT  = new THREE.Color(0x6c63ff);  // brand purple
+    const COL_TEAL    = new THREE.Color(0x00d4aa);  // accent teal
+    const COL_MID     = new THREE.Color(0x1a1a3e);  // dark indigo
 
-    const positions = new Float32Array(PARTICLE_COUNT * 3);
-    const velocities = new Float32Array(PARTICLE_COUNT * 3);
-    const colors = new Float32Array(PARTICLE_COUNT * 3);
+    // ── Gradient plane geometry ────────────────────────────────────
+    const SEGMENTS = 128;
+    const SIZE     = 120;
+    const geometry = new THREE.PlaneGeometry(SIZE, SIZE, SEGMENTS, SEGMENTS);
+    geometry.rotateX(-Math.PI * 0.45);
 
-    const accentColor = new THREE.Color(0x6c63ff);
-    const altColor = new THREE.Color(0x00d4aa);
+    // Per-vertex colour attribute
+    const count  = geometry.attributes.position.count;
+    const colors = new Float32Array(count * 3);
 
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-        const i3 = i * 3;
-        positions[i3]     = (Math.random() - 0.5) * FIELD_SIZE;
-        positions[i3 + 1] = (Math.random() - 0.5) * FIELD_SIZE;
-        positions[i3 + 2] = (Math.random() - 0.5) * FIELD_SIZE * 0.5;
+    const pos = geometry.attributes.position.array;
+    for (let i = 0; i < count; i++) {
+        const x = pos[i * 3];
+        const z = pos[i * 3 + 2];
+        const nx = (x / SIZE) + 0.5;
+        const nz = (z / SIZE) + 0.5;
 
-        velocities[i3]     = (Math.random() - 0.5) * 0.02;
-        velocities[i3 + 1] = (Math.random() - 0.5) * 0.02;
-        velocities[i3 + 2] = (Math.random() - 0.5) * 0.01;
+        const t   = nx * 0.6 + nz * 0.4;
+        const col = COL_DEEP.clone().lerp(COL_MID, t);
 
-        const mixRatio = Math.random();
-        const c = accentColor.clone().lerp(altColor, mixRatio);
-        colors[i3]     = c.r;
-        colors[i3 + 1] = c.g;
-        colors[i3 + 2] = c.b;
+        const cx = nx - 0.5, cz = nz - 0.5;
+        const distFromCenter = Math.sqrt(cx * cx + cz * cz) * 2;
+        const accentMix = Math.max(0, 1 - distFromCenter) * 0.25;
+        col.lerp(COL_ACCENT, accentMix);
+
+        colors[i * 3]     = col.r;
+        colors[i * 3 + 1] = col.g;
+        colors[i * 3 + 2] = col.b;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    const material = new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.55,
+        wireframe: false,
+        side: THREE.DoubleSide,
+    });
+
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.y = -8;
+    scene.add(mesh);
+
+    // ── Soft floating orbs (ambient glow) ──────────────────────────
+    const orbs = [];
+    const orbData = [
+        { color: 0x6c63ff, size: 3.0, x: -15, y:  4, z: -10, speed: 0.3 },
+        { color: 0x00d4aa, size: 2.2, x:  20, y:  6, z:   5, speed: 0.4 },
+        { color: 0x6c63ff, size: 1.8, x:   5, y:  2, z:  15, speed: 0.25 },
+        { color: 0x00d4aa, size: 2.5, x: -25, y:  8, z:  10, speed: 0.35 },
+        { color: 0x4a45c2, size: 2.0, x:  12, y:  3, z: -18, speed: 0.28 },
+    ];
+
+    for (const d of orbData) {
+        const geo = new THREE.SphereGeometry(d.size, 24, 24);
+        const mat = new THREE.MeshBasicMaterial({
+            color: d.color,
+            transparent: true,
+            opacity: 0.06,
+        });
+        const orb = new THREE.Mesh(geo, mat);
+        orb.position.set(d.x, d.y, d.z);
+        orb.userData = { ...d, baseY: d.y, baseX: d.x };
+        scene.add(orb);
+        orbs.push(orb);
     }
 
-    const particleGeometry = new THREE.BufferGeometry();
-    particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-    const particleMaterial = new THREE.PointsMaterial({
-        size: 0.4,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.7,
-        sizeAttenuation: true,
-        blending: THREE.AdditiveBlending,
-    });
-
-    const particles = new THREE.Points(particleGeometry, particleMaterial);
-    scene.add(particles);
-
-    // ── Connection lines ───────────────────────────────────────────
-    const LINE_DISTANCE = 12;
-    const MAX_LINES = 600;
-    const linePositions = new Float32Array(MAX_LINES * 6);
-    const lineColors = new Float32Array(MAX_LINES * 6);
-
-    const lineGeometry = new THREE.BufferGeometry();
-    lineGeometry.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
-    lineGeometry.setAttribute('color', new THREE.BufferAttribute(lineColors, 3));
-
-    const lineMaterial = new THREE.LineBasicMaterial({
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.15,
-        blending: THREE.AdditiveBlending,
-    });
-
-    const lines = new THREE.LineSegments(lineGeometry, lineMaterial);
-    scene.add(lines);
-
-    // ── Central glow sphere ────────────────────────────────────────
-    const glowGeometry = new THREE.SphereGeometry(2, 32, 32);
-    const glowMaterial = new THREE.MeshBasicMaterial({
-        color: 0x6c63ff,
-        transparent: true,
-        opacity: 0.08,
-    });
-    const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-    scene.add(glow);
-
-    // ── Mouse interaction ──────────────────────────────────────────
-    const mouse = { x: 0, y: 0 };
+    // ── Mouse tracking ─────────────────────────────────────────────
+    const mouse = { x: 0, y: 0, targetX: 0, targetY: 0 };
     document.addEventListener('mousemove', (e) => {
-        mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        mouse.targetX = (e.clientX / window.innerWidth) * 2 - 1;
+        mouse.targetY = -(e.clientY / window.innerHeight) * 2 + 1;
     });
+
+    // ── Store original Y values for wave animation ─────────────────
+    const originalY = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+        originalY[i] = pos[i * 3 + 1];
+    }
 
     // ── Animation loop ─────────────────────────────────────────────
     const clock = new THREE.Clock();
@@ -115,71 +123,70 @@ export function initBackground(canvasId = 'three-canvas') {
         requestAnimationFrame(animate);
         const t = clock.getElapsedTime();
 
-        // Update particle positions
-        const pos = particleGeometry.attributes.position.array;
-        for (let i = 0; i < PARTICLE_COUNT; i++) {
-            const i3 = i * 3;
-            pos[i3]     += velocities[i3];
-            pos[i3 + 1] += velocities[i3 + 1];
-            pos[i3 + 2] += velocities[i3 + 2];
+        // Smooth mouse interpolation
+        mouse.x += (mouse.targetX - mouse.x) * 0.03;
+        mouse.y += (mouse.targetY - mouse.y) * 0.03;
 
-            // Boundary wrap
-            for (let j = 0; j < 3; j++) {
-                const limit = j === 2 ? FIELD_SIZE * 0.25 : FIELD_SIZE * 0.5;
-                if (pos[i3 + j] > limit)  pos[i3 + j] = -limit;
-                if (pos[i3 + j] < -limit) pos[i3 + j] = limit;
-            }
+        // ── Undulating wave on the mesh ────────────────────────────
+        const posAttr = geometry.attributes.position;
+        const colAttr = geometry.attributes.color;
+        const arr     = posAttr.array;
+        const carr    = colAttr.array;
+
+        for (let i = 0; i < count; i++) {
+            const ix = i * 3;
+            const x  = arr[ix];
+            const z  = arr[ix + 2];
+
+            // Layered sine waves for organic motion
+            const wave1 = Math.sin(x * 0.06 + t * 0.4) * 1.8;
+            const wave2 = Math.sin(z * 0.08 + t * 0.3) * 1.2;
+            const wave3 = Math.sin((x + z) * 0.04 + t * 0.5) * 0.8;
+            const mouseInfluence =
+                Math.sin(x * 0.05 + mouse.x * 3 + t * 0.2) *
+                Math.cos(z * 0.05 + mouse.y * 3 + t * 0.2) * 1.0;
+
+            arr[ix + 1] = originalY[i] + wave1 + wave2 + wave3 + mouseInfluence;
+
+            // Subtly shift colours with the wave height
+            const height = (arr[ix + 1] + 5) / 10;
+            const nx = (x / SIZE) + 0.5;
+            const nz = (z / SIZE) + 0.5;
+            const baseT = nx * 0.6 + nz * 0.4;
+            const col = COL_DEEP.clone().lerp(COL_MID, baseT);
+
+            const peakTint = Math.max(0, height) * 0.15;
+            const tealOrPurple = Math.sin(t * 0.2 + nx * 3) > 0 ? COL_TEAL : COL_ACCENT;
+            col.lerp(tealOrPurple, peakTint);
+
+            carr[ix]     = col.r;
+            carr[ix + 1] = col.g;
+            carr[ix + 2] = col.b;
         }
-        particleGeometry.attributes.position.needsUpdate = true;
+        posAttr.needsUpdate = true;
+        colAttr.needsUpdate = true;
 
-        // Update lines between nearby particles
-        let lineIdx = 0;
-        const lp = lineGeometry.attributes.position.array;
-        const lc = lineGeometry.attributes.color.array;
-        for (let i = 0; i < PARTICLE_COUNT && lineIdx < MAX_LINES; i++) {
-            for (let j = i + 1; j < PARTICLE_COUNT && lineIdx < MAX_LINES; j++) {
-                const i3 = i * 3;
-                const j3 = j * 3;
-                const dx = pos[i3] - pos[j3];
-                const dy = pos[i3+1] - pos[j3+1];
-                const dz = pos[i3+2] - pos[j3+2];
-                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-
-                if (dist < LINE_DISTANCE) {
-                    const li = lineIdx * 6;
-                    lp[li]   = pos[i3];   lp[li+1] = pos[i3+1]; lp[li+2] = pos[i3+2];
-                    lp[li+3] = pos[j3];   lp[li+4] = pos[j3+1]; lp[li+5] = pos[j3+2];
-
-                    const alpha = 1 - dist / LINE_DISTANCE;
-                    lc[li] = 0.42 * alpha; lc[li+1] = 0.39 * alpha; lc[li+2] = 1.0 * alpha;
-                    lc[li+3] = 0.0 * alpha; lc[li+4] = 0.83 * alpha; lc[li+5] = 0.67 * alpha;
-                    lineIdx++;
-                }
-            }
+        // ── Animate orbs ───────────────────────────────────────────
+        for (const orb of orbs) {
+            const d = orb.userData;
+            orb.position.y = d.baseY + Math.sin(t * d.speed) * 3;
+            orb.position.x = d.baseX + Math.sin(t * d.speed * 0.7 + 1) * 4;
+            orb.material.opacity = 0.04 + Math.sin(t * d.speed * 1.2) * 0.025;
+            const scale = 1 + Math.sin(t * d.speed * 0.5) * 0.15;
+            orb.scale.setScalar(scale);
         }
-        lineGeometry.setDrawRange(0, lineIdx * 2);
-        lineGeometry.attributes.position.needsUpdate = true;
-        lineGeometry.attributes.color.needsUpdate = true;
 
-        // Gentle camera movement following mouse
-        camera.position.x += (mouse.x * 5 - camera.position.x) * 0.02;
-        camera.position.y += (mouse.y * 3 - camera.position.y) * 0.02;
-        camera.lookAt(scene.position);
-
-        // Pulsing glow
-        glow.scale.setScalar(1 + Math.sin(t * 0.8) * 0.15);
-        glow.material.opacity = 0.06 + Math.sin(t * 1.2) * 0.03;
-
-        // Slow rotate particles
-        particles.rotation.y = t * 0.03;
-        particles.rotation.x = Math.sin(t * 0.02) * 0.1;
+        // ── Gentle camera sway ─────────────────────────────────────
+        camera.position.x += (mouse.x * 6 - camera.position.x) * 0.015;
+        camera.position.y += (20 + mouse.y * 4 - camera.position.y) * 0.015;
+        camera.lookAt(0, 0, 0);
 
         renderer.render(scene, camera);
     }
 
     animate();
 
-    // ── Resize handling ────────────────────────────────────────────
+    // ── Resize ─────────────────────────────────────────────────────
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();

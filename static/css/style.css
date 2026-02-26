@@ -107,17 +107,17 @@ a:hover {
     align-items: center;
 }
 
-.navbar-links a {
+.navbar-links a:not(.btn) {
     color: var(--text-secondary);
     font-size: 0.9rem;
     font-weight: 500;
     padding: 0.4rem 0;
     position: relative;
 }
-.navbar-links a:hover {
+.navbar-links a:not(.btn):hover {
     color: var(--text-primary);
 }
-.navbar-links a::after {
+.navbar-links a:not(.btn)::after {
     content: '';
     position: absolute;
     bottom: 0;
@@ -127,8 +127,19 @@ a:hover {
     background: var(--accent);
     transition: width 0.3s;
 }
-.navbar-links a:hover::after {
+.navbar-links a:not(.btn):hover::after {
     width: 100%;
+}
+
+/* Navbar buttons need extra breathing room */
+.navbar-links .btn {
+    padding: 0.55rem 1.6rem;
+    font-size: 0.85rem;
+    letter-spacing: 0.01em;
+    min-width: max-content;
+}
+.navbar-links .btn-primary {
+    padding: 0.55rem 1.8rem;
 }
 
 /* ── Buttons ─────────────────────────────────────────────────────── */
@@ -150,11 +161,14 @@ a:hover {
 .btn-primary {
     background: linear-gradient(135deg, var(--accent), #5a52d5);
     color: #fff;
+    padding: 0.65rem 2rem;
     box-shadow: 0 4px 15px var(--accent-glow);
+    white-space: nowrap;
 }
 .btn-primary:hover {
     transform: translateY(-2px);
     box-shadow: 0 6px 25px var(--accent-glow);
+    color: #fff;
 }
 
 .btn-secondary {

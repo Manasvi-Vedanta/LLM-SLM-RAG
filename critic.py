@@ -41,6 +41,24 @@ class CriticResult:
     explanation: str           # brief rationale from the LLM
 
 
+# ── shared JSON parsing ──────────────────────────────────────────────
+def parse_critic_json(raw: str) -> CriticResult:
+    """Best-effort JSON parse of Critic LLM output with regex fallback."""
+    cleaned = re.sub(r"```json\s*", "", raw)
+    cleaned = re.sub(r"```\s*", "", cleaned)
+    cleaned = cleaned.strip()
+    try:
+        data = json.loads(cleaned)
+        return CriticResult(
+            confidence=float(data["confidence"]),
+            explanation=str(data.get("explanation", "")),
+        )
+    except (json.JSONDecodeError, KeyError, ValueError):
+        match = re.search(r'"?confidence"?\s*:\s*(\d+)', raw)
+        conf = float(match.group(1)) if match else 0.0
+        return CriticResult(confidence=conf, explanation=raw[:200])
+
+
 # ── abstract base ─────────────────────────────────────────────────────
 class BaseCritic(ABC):
     """Interface every Critic implementation must follow."""
@@ -137,22 +155,117 @@ Rules:
 
     @staticmethod
     def _parse_validation(raw: str) -> CriticResult:
-        """Best-effort JSON parse with regex fallback."""
-        # Strip markdown code fences if present
-        cleaned = re.sub(r"```json\s*", "", raw)
-        cleaned = re.sub(r"```\s*", "", cleaned)
-        cleaned = cleaned.strip()
-        try:
-            data = json.loads(cleaned)
-            return CriticResult(
-                confidence=float(data["confidence"]),
-                explanation=str(data.get("explanation", "")),
-            )
-        except (json.JSONDecodeError, KeyError, ValueError):
-            # Fallback: try to pull a number out of the string
-            match = re.search(r'"?confidence"?\s*:\s*(\d+)', raw)
-            conf = float(match.group(1)) if match else 0.0
-            return CriticResult(confidence=conf, explanation=raw[:200])
+        """Delegates to module-level ``parse_critic_json``."""
+        return parse_critic_json(raw)
+
+    # ── fallback generation ───────────────────────────────────────────
+    _FALLBACK_PROMPT = """\
+The user asked the following question, but the reference documents did not
+contain a sufficient answer.
+
+Question: {question}
+
+Please provide a helpful, accurate answer using your own general knowledge.
+Begin your answer with:
+"The document did not contain the answer, but here is the correct answer
+based on general knowledge..."
+"""
+
+    def generate_fallback_answer(self, question: str) -> str:
+        prompt = self._FALLBACK_PROMPT.format(question=question)
+        return self._call_with_retry(prompt)
+
+
+# ── Gemma implementation (local SLM via Ollama) ──────────────────────
+class GemmaCritic(BaseCritic):
+    """
+    Uses a locally-running Gemma 3 4B model via Ollama.
+
+    Prerequisites
+    ~~~~~~~~~~~~~
+    1. Install Ollama:  https://ollama.com
+    2. Pull the model:  ``ollama pull gemma3:4b``
+    3. Set ``CRITIC_BACKEND = "gemma"`` in ``config.py``.
+    """
+
+    def __init__(
+        self,
+        model_name: str | None = None,
+        base_url: str | None = None,
+    ):
+        self.model_name = model_name or config.OLLAMA_MODEL_NAME
+        self.base_url = (base_url or config.OLLAMA_BASE_URL).rstrip("/")
+        self._max_retries = 3
+        self._retry_base_wait = 5  # seconds
+        logger.info(
+            "GemmaCritic initialised  (model=%s, url=%s)",
+            self.model_name,
+            self.base_url,
+        )
+
+    # ── Ollama REST call ──────────────────────────────────────────────
+    def _call_with_retry(self, prompt: str) -> str:
+        """Call the Ollama /api/generate endpoint with retry logic."""
+        import requests  # lazily imported so non-Gemma users don't need it
+
+        url = f"{self.base_url}/api/generate"
+        payload = {
+            "model": self.model_name,
+            "prompt": prompt,
+            "stream": False,
+        }
+
+        for attempt in range(1, self._max_retries + 1):
+            try:
+                resp = requests.post(url, json=payload, timeout=120)
+                resp.raise_for_status()
+                return resp.json()["response"].strip()
+            except Exception as exc:
+                if attempt < self._max_retries:
+                    wait = self._retry_base_wait * attempt
+                    logger.warning(
+                        "Ollama call failed (attempt %d/%d): %s  – retrying in %ds",
+                        attempt, self._max_retries, exc, wait,
+                    )
+                    time.sleep(wait)
+                else:
+                    raise RuntimeError(
+                        f"Ollama ({self.model_name}) failed after {self._max_retries} "
+                        f"attempts: {exc}"
+                    ) from exc
+        # unreachable, but keeps type-checkers happy
+        return ""
+
+    # ── validation prompt ─────────────────────────────────────────────
+    _VALIDATE_PROMPT = """\
+You are a strict validation judge for a Retrieval-Augmented Generation system.
+
+### TASK
+Decide whether the **Excerpt** below correctly and sufficiently answers the
+**Question**.  Return your assessment as JSON with exactly two keys:
+
+  {{"confidence": <int 0-100>, "explanation": "<one sentence>"}}
+
+Rules:
+* 100 = the excerpt fully and correctly answers the question.
+*   0 = the excerpt is completely irrelevant.
+* Be harsh — partial or vague matches should score below 70.
+* ONLY output the JSON object. No extra text.
+
+### QUESTION
+{question}
+
+### EXCERPT
+{excerpt}
+
+### YOUR JSON RESPONSE:
+"""
+
+    def validate(self, question: str, excerpt: str) -> CriticResult:
+        prompt = self._VALIDATE_PROMPT.format(question=question, excerpt=excerpt)
+        raw = self._call_with_retry(prompt)
+        logger.debug("GemmaCritic raw response: %s", raw)
+        return parse_critic_json(raw)
 
     # ── fallback generation ───────────────────────────────────────────
     _FALLBACK_PROMPT = """\
@@ -196,3 +309,32 @@ class MockCritic(BaseCritic):
             "[MockCritic] This is a placeholder fallback answer for: "
             f"{question}"
         )
+
+
+# ── factory ──────────────────────────────────────────────────────────
+def create_critic(backend: str | None = None) -> BaseCritic:
+    """
+    Instantiate the right Critic based on ``config.CRITIC_BACKEND``.
+
+    Supported values: ``"gemini"``, ``"gemma"``, ``"mock"``.
+    """
+    backend = (backend or config.CRITIC_BACKEND).lower().strip()
+
+    if backend == "gemini":
+        if config.GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
+            logger.warning(
+                "No GEMINI_API_KEY set — falling back to MockCritic."
+            )
+            return MockCritic(fixed_confidence=90.0)
+        return GeminiCritic()
+
+    if backend == "gemma":
+        return GemmaCritic()
+
+    if backend == "mock":
+        return MockCritic(fixed_confidence=90.0)
+
+    raise ValueError(
+        f"Unknown CRITIC_BACKEND: {backend!r}.  "
+        f"Supported: 'gemini', 'gemma', 'mock'."
+    )

@@ -50,7 +50,7 @@ from database import (
 )
 from ingestion import ingest
 from vector_store import build_vectorstore, load_vectorstore
-from critic import GeminiCritic, MockCritic
+from critic import GeminiCritic, GemmaCritic, MockCritic, create_critic
 from pipeline import RAGPipeline
 
 logger = logging.getLogger(__name__)
@@ -105,13 +105,13 @@ async def startup_event():
         logger.info("Ingested %d chunks", len(chunks))
         vectorstore = build_vectorstore(chunks)
 
-    # Initialise critic
-    if config.GEMINI_API_KEY and config.GEMINI_API_KEY != "YOUR_GEMINI_API_KEY_HERE":
-        critic = GeminiCritic()
-        logger.info("Using GeminiCritic (model=%s)", config.GEMINI_MODEL_NAME)
-    else:
-        critic = MockCritic(fixed_confidence=90.0)
-        logger.info("No API key found – using MockCritic")
+    # Initialise critic (reads CRITIC_BACKEND from config.py)
+    critic = create_critic()
+    logger.info(
+        "Critic ready: %s (backend=%s)",
+        type(critic).__name__,
+        config.CRITIC_BACKEND,
+    )
 
     _pipeline = RAGPipeline(vectorstore=vectorstore, critic=critic)
     logger.info("RAG pipeline ready.")

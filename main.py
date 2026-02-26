@@ -30,7 +30,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="repla
 import config
 from ingestion import ingest
 from vector_store import build_vectorstore, load_vectorstore
-from critic import GeminiCritic, MockCritic
+from critic import GeminiCritic, GemmaCritic, MockCritic, create_critic
 from pipeline import RAGPipeline, QueryResult
 
 
@@ -125,15 +125,8 @@ def main() -> None:
         critic = MockCritic(fixed_confidence=90.0)
         print("[*] Using MockCritic (offline mode).\n")
     else:
-        if config.GEMINI_API_KEY == "YOUR_GEMINI_API_KEY_HERE":
-            print(
-                "⚠️  No GEMINI_API_KEY set.  Falling back to MockCritic.\n"
-                "    Set the env-var or edit config.py to use the real API.\n"
-            )
-            critic = MockCritic(fixed_confidence=90.0)
-        else:
-            critic = GeminiCritic()
-            print(f"[*] Using GeminiCritic (model={config.GEMINI_MODEL_NAME}).\n")
+        critic = create_critic()  # reads CRITIC_BACKEND from config.py
+        print(f"[*] Using {type(critic).__name__} (backend={config.CRITIC_BACKEND}).\n")
 
     # ---- Pipeline -----------------------------------------------------
     pipeline = RAGPipeline(

@@ -47,13 +47,22 @@ SIMILARITY_THRESHOLD = 0.20           # cosine-similarity floor (scope gate)
 # Tune this after inspecting your own score distribution.
 
 # ──────────────────────────────────────────────
-# Critic / Validator (LLM) Settings
+# Critic / Validator Settings
 # ──────────────────────────────────────────────
 CONFIDENCE_THRESHOLD = 85             # percentage above which we trust the excerpt
 
-# Gemini API  (set your real key in an env-var or .env file)
+# ── Backend selection ──
+# "gemini"  → Google Gemini 2.5 Flash (cloud LLM) — requires GEMINI_API_KEY
+# "gemma"   → Gemma 3 4B (local SLM via Ollama)   — requires Ollama running
+CRITIC_BACKEND = "gemma"              # ← change to "gemini" to use the cloud LLM
+
+# ── Gemini API (cloud LLM) ──
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
-GEMINI_MODEL_NAME = "gemini-2.5-flash"   # swap to any Gemini / other model
+GEMINI_MODEL_NAME = "gemini-2.5-flash"
+
+# ── Ollama / Gemma (local SLM) ──
+OLLAMA_MODEL_NAME = "gemma3:4b"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # ──────────────────────────────────────────────
 # Logging

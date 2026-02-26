@@ -1,17 +1,18 @@
 # Self-Correcting RAG System (Actor-Critic)
 
-A full-stack Retrieval-Augmented Generation system that answers questions from PDF documents, validates answers using a Critic LLM, and serves everything through a professional web interface with user authentication.
+A full-stack Retrieval-Augmented Generation system that answers questions from PDF documents, validates answers using a swappable Critic model (cloud LLM **or** local SLM), and serves everything through a professional web interface with user authentication.
 
 ---
 
 ## Key Features
 
-- **Actor-Critic RAG pipeline** — retrieves document chunks, then validates them with an LLM before responding
+- **Actor-Critic RAG pipeline** — retrieves document chunks, then validates them with a Critic model before responding
+- **LLM / SLM selection** — switch between Google Gemini 2.5 Flash (cloud LLM) and Gemma 3 4B (local SLM via Ollama) with a single config change
 - **Three answer modes** — exact document excerpt, general-knowledge fallback, or out-of-scope rejection
-- **Web UI** — dark-themed glassmorphism design with Three.js animated particle background
+- **Web UI** — dark-themed glassmorphism design with Three.js animated gradient-mesh background
 - **Authentication** — JWT-based signup/login with bcrypt password hashing and per-user chat history
 - **Two interfaces** — browser-based chatbot (FastAPI) and terminal CLI
-- **Configurable** — all thresholds, models, and chunk parameters in one config file
+- **Fully configurable** — all thresholds, models, backends, and chunk parameters in one config file
 
 ---
 
@@ -28,31 +29,31 @@ A full-stack Retrieval-Augmented Generation system that answers questions from P
                                               │
                               ┌───────────────┴───────────────┐
                               ▼                               ▼
-                        Out of Scope                  ┌──────────────┐
-                                                      │ Gemini Critic│
-                                                      │  (Validator) │
-                                                      └──────┬───────┘
-                                                             │
-                                              ┌──────────────┴──────────────┐
-                                              ▼                             ▼
-                                     confidence ≥ 85%              confidence < 85%
-                                     Return document               LLM fallback
-                                     excerpt verbatim              from general knowledge
+                        Out of Scope               ┌──────────────────┐
+                                                   │  Critic Model    │
+                                                   │  (Gemini / Gemma)│
+                                                   └────────┬─────────┘
+                                                            │
+                                             ┌──────────────┴──────────────┐
+                                             ▼                             ▼
+                                    confidence ≥ 85%              confidence < 85%
+                                    Return document               LLM/SLM fallback
+                                    excerpt verbatim              from general knowledge
 ```
 
 ### Module Breakdown
 
 | Module | Role |
 |---|---|
+| `config.py` | All tuneable parameters: paths, models, thresholds, backend selection |
 | `ingestion.py` | Discovers PDFs in `Dataset/`, loads pages with PyPDFLoader, splits into overlapping chunks |
 | `vector_store.py` | Embeds chunks with BGE-base-en-v1.5 (768d), builds/loads FAISS index, applies scope gate |
-| `critic.py` | GeminiCritic validates excerpts, scores confidence, generates fallback answers; includes rate-limit retry |
+| `critic.py` | `GeminiCritic` (cloud), `GemmaCritic` (local Ollama), `MockCritic` (offline), and `create_critic()` factory |
 | `pipeline.py` | Orchestrates Actor → Scope Gate → Critic → Confidence Gate flow |
 | `server.py` | FastAPI backend — auth endpoints, chat API, static file serving, pipeline startup |
 | `auth.py` | JWT token creation/verification, bcrypt password hashing |
 | `database.py` | SQLite user store + chat history persistence |
 | `main.py` | Terminal CLI with interactive loop (alternative to web UI) |
-| `config.py` | All tuneable parameters in one place |
 
 ### Frontend
 
@@ -62,7 +63,7 @@ A full-stack Retrieval-Augmented Generation system that answers questions from P
 | `static/login.html` | Login form with validation and error display |
 | `static/signup.html` | Registration form with password confirmation |
 | `static/chat.html` | Chatbot interface with typing indicators, source badges, suggestion chips, chat history |
-| `static/js/background.js` | Three.js particle network — 200 particles with connecting lines, mouse-reactive camera, pulsing glow sphere |
+| `static/js/background.js` | Three.js animated gradient mesh — undulating surface with layered sine waves, floating orbs, mouse-reactive camera |
 | `static/js/auth.js` | Token management, authenticated fetch wrapper, route guards |
 | `static/css/style.css` | Dark theme with CSS variables, glassmorphism cards, responsive layout, animations |
 
@@ -107,7 +108,8 @@ Code/
 
 - Python 3.10+
 - Windows / Linux / macOS
-- Internet access (for Gemini API calls)
+- **For Gemini backend:** Internet access + Gemini API key
+- **For Gemma backend:** [Ollama](https://ollama.com) installed locally
 
 ---
 
@@ -138,13 +140,35 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4) Configure API key
+### 4) Configure the Critic backend
+
+Open `config.py` and set `CRITIC_BACKEND`:
+
+```python
+# "gemini"  → Google Gemini 2.5 Flash (cloud LLM)
+# "gemma"   → Gemma 3 4B (local SLM via Ollama)
+CRITIC_BACKEND = "gemini"    # or "gemma"
+```
+
+#### Option A — Gemini (cloud LLM)
 
 Create a `.env` file in the project root:
 
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
 ```
+
+#### Option B — Gemma 3 4B (local SLM)
+
+1. Install Ollama from [ollama.com](https://ollama.com)
+2. Pull the model:
+   ```bash
+   ollama pull gemma3:4b
+   ```
+3. Ensure Ollama is running (`ollama serve` or the system tray app)
+4. Set `CRITIC_BACKEND = "gemma"` in `config.py`
+
+No API key or internet is needed for inference once the model is downloaded.
 
 ---
 
@@ -180,13 +204,16 @@ All parameters live in `config.py`:
 
 | Parameter | Default | Description |
 |---|---|---|
+| `CRITIC_BACKEND` | `"gemini"` | `"gemini"` for cloud LLM, `"gemma"` for local SLM, `"mock"` for offline |
 | `CHUNK_SIZE` | 1000 | Characters per document chunk |
 | `CHUNK_OVERLAP` | 200 | Overlap between consecutive chunks |
 | `EMBEDDING_MODEL_NAME` | `BAAI/bge-base-en-v1.5` | Sentence-transformer model (768 dims) |
 | `TOP_K` | 5 | Number of chunks to retrieve |
 | `SIMILARITY_THRESHOLD` | 0.20 | Cosine similarity floor for scope gate |
 | `CONFIDENCE_THRESHOLD` | 85 | Critic confidence floor (0–100) |
-| `GEMINI_MODEL_NAME` | `gemini-2.5-flash` | LLM used for critic validation |
+| `GEMINI_MODEL_NAME` | `gemini-2.5-flash` | Cloud LLM model name |
+| `OLLAMA_MODEL_NAME` | `gemma3:4b` | Local SLM model name |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
 
 **Tuning tips:**
 - Lower `SIMILARITY_THRESHOLD` if relevant questions are marked out-of-scope
@@ -199,7 +226,7 @@ All parameters live in `config.py`:
 
 1. **Actor** retrieves top-k document chunks for the query
 2. **Scope Gate** — if best cosine similarity < threshold → **Out of Scope**
-3. **Critic** — Gemini validates whether the excerpt answers the question (returns confidence 0–100)
+3. **Critic** — the selected model (Gemini or Gemma) validates whether the excerpt answers the question (confidence 0–100)
 4. **Confidence Gate**:
    - ≥ threshold → return **exact document excerpt** with source file, page, and scores
    - < threshold → return **general-knowledge fallback** generated by the Critic
@@ -210,16 +237,35 @@ $$\text{cosine\_sim} = 1 - \frac{L2^2}{2}$$
 
 ---
 
+## Critic Backend Details
+
+### Gemini (Cloud LLM)
+
+- **Model:** Google Gemini 2.5 Flash
+- **Pros:** High accuracy, strong instruction-following, fast
+- **Cons:** Requires API key, internet, subject to rate limits (automatic retry built in)
+
+### Gemma 3 4B (Local SLM)
+
+- **Model:** Gemma 3 4B running via Ollama
+- **Pros:** Fully offline, no API costs, complete data privacy
+- **Cons:** Requires ~3.3 GB disk space, slower on CPU-only machines
+
+Both backends share identical validation and fallback prompts. The `create_critic()` factory in `critic.py` reads `CRITIC_BACKEND` from config and returns the appropriate implementation.
+
+---
+
 ## Web UI Features
 
 ### Landing Page
-- Three.js animated particle network background (200 particles with dynamic connections)
-- Mouse-reactive camera movement and pulsing central glow
+- Three.js animated gradient mesh background (128×128 undulating surface with layered sine waves)
+- Floating ambient orbs with pulsing glow
+- Mouse-reactive camera sway
 - Feature cards explaining the system architecture
 
 ### Authentication
 - JWT tokens stored in localStorage (24-hour expiry)
-- bcrypt password hashing
+- bcrypt password hashing (direct, without passlib)
 - Route guards redirect unauthenticated users to login
 
 ### Chatbot
@@ -250,7 +296,8 @@ $$\text{cosine\_sim} = 1 - \frac{L2^2}{2}$$
 |---|---|
 | Embeddings | BAAI/bge-base-en-v1.5 via SentenceTransformers |
 | Vector Store | FAISS (L2 index, local persistence) |
-| LLM Critic | Google Gemini 2.5 Flash |
+| LLM Critic | Google Gemini 2.5 Flash (cloud) |
+| SLM Critic | Gemma 3 4B via Ollama (local) |
 | PDF Parsing | PyPDFLoader (LangChain) |
 | Chunking | RecursiveCharacterTextSplitter |
 | Backend | FastAPI + Uvicorn |
@@ -267,6 +314,8 @@ $$\text{cosine\_sim} = 1 - \frac{L2^2}{2}$$
 |---|---|
 | `No PDF files found` | Place `.pdf` files inside `Dataset/` |
 | Gemini 429 / ResourceExhausted | Automatic retry/backoff is built in; wait if persistent |
+| Ollama connection refused | Ensure Ollama is running: `ollama serve` or check tray icon |
+| `Unknown CRITIC_BACKEND` | Set `CRITIC_BACKEND` to `"gemini"`, `"gemma"`, or `"mock"` in `config.py` |
 | Windows encoding crash | `server.py` and `main.py` wrap stdout in UTF-8 |
 | Weak retrieval scores | Run `python main.py --rebuild` or tune `SIMILARITY_THRESHOLD` |
 | Auth errors / expired token | Log out and log back in; tokens expire after 24 hours |
