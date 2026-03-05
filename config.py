@@ -60,8 +60,17 @@ CRITIC_BACKEND = "gemma"              # ← change to "gemini" to use the cloud 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
 GEMINI_MODEL_NAME = "gemini-2.5-flash"
 
+# Fallback models used when the primary hits a rate limit (429).
+# The system tries them in order: primary → fallback_1 → fallback_2.
+GEMINI_FALLBACK_MODELS = [
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash-lite",
+]
+
 # ── Ollama / Gemma (local SLM) ──
-OLLAMA_MODEL_NAME = "gemma3:4b"
+# Use "gemma3:4b"       for the base (non-fine-tuned) model
+# Use "gemma3-critic"   for the fine-tuned model (after running finetune.py)
+OLLAMA_MODEL_NAME = "gemma3-critic-v2"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # ──────────────────────────────────────────────

@@ -20,6 +20,23 @@ vectorstore/
 # SQLite database (local user data)
 users.db
 
+# Fine-tuning artifacts (large model files)
+finetuned_model/
+finetuned_model_v2/
+training_data.jsonl
+training_data_v2.jsonl
+evaluation_summary.json
+evaluation_results.json
+
+# GGUF model files
+*.gguf
+
+# Unsloth compilation cache
+unsloth_compiled_cache/
+
+# Temporary analysis scripts
+_*.py
+
 # OS specific
 .DS_Store
 Thumbs.db

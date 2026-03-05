@@ -1,0 +1,20 @@
+# Modelfile for fine-tuned Gemma 3 4B RAG Critic
+# ------------------------------------------------
+# This is a TEMPLATE.  After running finetune.py it will auto-generate
+# a Modelfile with the correct GGUF path.
+#
+# If you want to create the Ollama model manually:
+#   1. Replace the FROM path below with your actual .gguf file
+#   2. Run:  ollama create gemma3-critic -f Modelfile
+#   3. Set OLLAMA_MODEL_NAME = "gemma3-critic" in config.py
+#
+# For the base (non-fine-tuned) model, use:
+#   ollama pull gemma3:4b
+
+FROM ./finetuned_model/gguf/gemma-3-4b-it-Q4_K_M.gguf
+
+PARAMETER temperature 0.3
+PARAMETER num_ctx 2048
+PARAMETER stop "<end_of_turn>"
+
+SYSTEM "You are a strict validation judge for a Retrieval-Augmented Generation system. Always respond with valid JSON containing exactly two keys: confidence (int 0-100) and explanation (one sentence)."

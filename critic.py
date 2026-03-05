@@ -95,32 +95,73 @@ class GeminiCritic(BaseCritic):
         import google.generativeai as genai  # type: ignore
 
         genai.configure(api_key=self.api_key)
+        self._genai = genai                  # keep ref for creating fallback models
         self._model = genai.GenerativeModel(self.model_name)
         self._max_retries = 3
         self._retry_base_wait = 25          # seconds (Gemini free-tier resets every ~60 s)
-        logger.info("GeminiCritic initialised  (model=%s)", self.model_name)
 
-    # ── rate-limit-aware API call ─────────────────────────────────────
+        # Build ordered fallback chain: primary → fallback models
+        fallback_names = getattr(config, "GEMINI_FALLBACK_MODELS", [])
+        self._model_chain: list[tuple[str, object]] = [
+            (self.model_name, self._model),
+        ]
+        for fb_name in fallback_names:
+            self._model_chain.append(
+                (fb_name, genai.GenerativeModel(fb_name))
+            )
+
+        logger.info(
+            "GeminiCritic initialised  (model=%s, fallbacks=%s)",
+            self.model_name,
+            [n for n, _ in self._model_chain[1:]] or "none",
+        )
+
+    # ── helpers ───────────────────────────────────────────────────────
+    @staticmethod
+    def _is_rate_limit(exc: Exception) -> bool:
+        """Return True if *exc* looks like a 429 / ResourceExhausted error."""
+        return "429" in str(exc) or "ResourceExhausted" in type(exc).__name__
+
+    # ── rate-limit-aware API call with model fallback chain ───────────
     def _call_with_retry(self, prompt: str) -> str:
-        """Call Gemini with automatic retry on 429 rate-limit errors."""
-        for attempt in range(1, self._max_retries + 1):
-            try:
-                response = self._model.generate_content(prompt)
-                return response.text.strip()
-            except Exception as exc:
-                if "429" in str(exc) or "ResourceExhausted" in type(exc).__name__:
-                    wait = self._retry_base_wait * attempt
-                    logger.warning(
-                        "Rate-limited by Gemini API (attempt %d/%d). "
-                        "Retrying in %ds...",
-                        attempt, self._max_retries, wait,
-                    )
-                    time.sleep(wait)
-                else:
-                    raise
-        # final attempt — let it raise if it fails
-        response = self._model.generate_content(prompt)
-        return response.text.strip()
+        """Call Gemini with automatic retry on 429 rate-limit errors.
+
+        Tries each model in ``self._model_chain`` (primary → fallbacks).
+        For every model the method retries ``_max_retries`` times before
+        moving on to the next model.  Only rate-limit errors trigger a
+        fallback; any other exception is raised immediately.
+        """
+        last_exc: Exception | None = None
+
+        for model_name, model_obj in self._model_chain:
+            for attempt in range(1, self._max_retries + 1):
+                try:
+                    response = model_obj.generate_content(prompt)
+                    return response.text.strip()
+                except Exception as exc:
+                    if self._is_rate_limit(exc):
+                        last_exc = exc
+                        wait = self._retry_base_wait * attempt
+                        logger.warning(
+                            "Rate-limited by %s (attempt %d/%d). "
+                            "Retrying in %ds...",
+                            model_name, attempt, self._max_retries, wait,
+                        )
+                        time.sleep(wait)
+                    else:
+                        raise
+
+            # All retries exhausted for this model — cascade to next
+            logger.warning(
+                "All %d retries exhausted for %s — falling back to next model.",
+                self._max_retries, model_name,
+            )
+
+        # Every model in the chain is rate-limited
+        raise RuntimeError(
+            "All Gemini models rate-limited after exhausting retries: "
+            f"{[n for n, _ in self._model_chain]}"
+        ) from last_exc
 
     # ── validation prompt ─────────────────────────────────────────────
     _VALIDATE_PROMPT = """\

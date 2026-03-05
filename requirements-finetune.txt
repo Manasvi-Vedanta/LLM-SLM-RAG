@@ -1,0 +1,26 @@
+# Fine-Tuning Dependencies (GPU required)
+# -----------------------------------------
+# Install ONLY when you're ready to fine-tune on a machine with
+# an NVIDIA GPU (≥ 6 GB VRAM).
+#
+# Usage:  pip install -r requirements-finetune.txt
+#
+# These are separate from requirements.txt because they pull in
+# large CUDA-dependent packages that aren't needed for inference.
+
+# LoRA fine-tuning framework (fast, low-VRAM)
+unsloth>=2024.0
+
+# HuggingFace ecosystem
+datasets>=2.18.0
+trl>=0.8.0
+transformers>=4.40.0
+peft>=0.10.0
+
+# PyTorch (CUDA) — install the version matching your CUDA toolkit
+# See https://pytorch.org/get-started/locally/ for the right command.
+# Example for CUDA 12.1:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.2.0
+accelerate>=0.28.0
+bitsandbytes>=0.43.0

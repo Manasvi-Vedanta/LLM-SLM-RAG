@@ -21,6 +21,10 @@ google-generativeai>=0.8.0
 # --- SLM backend (Gemma 3 via Ollama) ---
 requests>=2.31.0              # used for Ollama REST calls
 
+# --- Fine-tuning (GPU required, optional) ---
+# See requirements-finetune.txt for the full list.
+# Install with:  pip install -r requirements-finetune.txt
+
 # --- Web UI (FastAPI) ---
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
