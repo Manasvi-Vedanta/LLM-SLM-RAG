@@ -10,7 +10,8 @@ A full-stack Retrieval-Augmented Generation system that answers questions from P
 - **LLM / SLM selection** — switch between Google Gemini 2.5 Flash (cloud LLM) and a fine-tuned Gemma 3 4B (local SLM via Ollama) with a single config change
 - **Complete fine-tuning pipeline** — synthetic data generation, QLoRA training, GGUF conversion, Ollama deployment, and side-by-side evaluation
 - **Rate-limit resilient** — Gemini backend cascades through fallback models (`gemini-2.5-flash` → `gemini-3-flash-preview` → `gemini-2.5-flash-lite`) on 429 errors
-- **Three answer modes** — exact document excerpt, general-knowledge fallback, or out-of-scope rejection
+- **Structured answer formatting** — high-confidence document excerpts are restructured into clean Definition / Syntax / Key Points / Example format via the base Gemma model
+- **Three answer modes** — formatted document answer, general-knowledge fallback, or out-of-scope rejection
 - **Web UI** — dark-themed glassmorphism design with Three.js animated gradient-mesh background
 - **Authentication** — JWT-based signup/login with bcrypt password hashing and per-user chat history
 - **Two interfaces** — browser-based chatbot (FastAPI) and terminal CLI
@@ -38,9 +39,9 @@ A full-stack Retrieval-Augmented Generation system that answers questions from P
                                                             │
                                              ┌──────────────┴──────────────┐
                                              ▼                             ▼
-                                    confidence ≥ 85%              confidence < 85%
-                                    Return document               LLM/SLM fallback
-                                    excerpt verbatim              from general knowledge
+                                    confidence > 85%              confidence ≤ 85%
+                                    Format excerpt into           LLM/SLM fallback
+                                    structured answer             from general knowledge
 ```
 
 ### Module Breakdown
@@ -232,7 +233,7 @@ All parameters live in `config.py`:
 | `CONFIDENCE_THRESHOLD` | 85 | Critic confidence floor (0–100) |
 | `GEMINI_MODEL_NAME` | `gemini-2.5-flash` | Primary cloud LLM model |
 | `GEMINI_FALLBACK_MODELS` | `[gemini-3-flash-preview, gemini-2.5-flash-lite]` | Fallback models on rate limit |
-| `OLLAMA_MODEL_NAME` | `gemma3-critic-v2` | Local SLM model (fine-tuned) |
+| `OLLAMA_MODEL_NAME` | `gemma3-critic-v3-new` | Local SLM model (fine-tuned) |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
 
 **Tuning tips:**
@@ -592,7 +593,7 @@ python evaluate.py --out results.json               # save raw per-question data
 - `.env` is gitignored — API keys never reach the repository
 - `users.db` is gitignored — user data stays local
 - `vectorstore/` is gitignored — regeneratable from source PDFs
-- `finetuned_model*/` is gitignored — model weights stay local
+- `finetuned_model*/` is gitignored — model weights stay local (available on HuggingFace, see below)
 - Passwords are hashed with bcrypt (never stored in plain text)
 - JWT tokens are signed with a configurable secret key
 
@@ -607,6 +608,25 @@ python evaluate.py --out results.json               # save raw per-question data
 - Citation highlighting at chunk level
 - WebSocket streaming for real-time token-by-token responses
 - User file upload through the web UI
+
+---
+
+## Pre-Trained Models (HuggingFace)
+
+All three fine-tuned Gemma 3 4B critic models are available on HuggingFace:
+
+| Model | Description | Link |
+|---|---|---|
+| **gemma3-critic-v1** | First fine-tune — confidence capped at 83, 0% document answer rate | [V3gito/gemma3-critic-v1](https://huggingface.co/V3gito/gemma3-critic-v1) |
+| **gemma3-critic-v2** | Calibrated confidence distribution — 100% document answer rate | [V3gito/gemma3-critic-v2](https://huggingface.co/V3gito/gemma3-critic-v2) |
+| **gemma3-critic-v3** | Latest — trained on expanded 300-question bank with improved data | [V3gito/gemma3-critic-v3](https://huggingface.co/V3gito/gemma3-critic-v3) |
+
+Each repo contains the GGUF file (F16) and LoRA adapter checkpoints. To use a model with Ollama:
+
+```bash
+# Download the GGUF from HuggingFace, then create an Ollama model
+ollama create gemma3-critic -f Modelfile_gguf --quantize q4_K_M
+```
 
 ---
 
