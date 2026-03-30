@@ -25,7 +25,7 @@ BASE_MODEL = args.base
 LORA_DIR   = Path(args.lora)
 OUTPUT_DIR = Path(args.out)
 
-print(f"[1/4] Loading base model on CPU in float16 (≈8 GB RAM) ...")
+print(f"[1/4] Loading base model on CPU in float16 (~8 GB RAM) ...")
 tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, trust_remote_code=True)
 model = AutoModelForCausalLM.from_pretrained(
     BASE_MODEL,

@@ -59,6 +59,22 @@ def parse_critic_json(raw: str) -> CriticResult:
         return CriticResult(confidence=conf, explanation=raw[:200])
 
 
+# ── post-processing for formatted answers ────────────────────────────
+def _clean_formatted_answer(raw: str) -> str:
+    """Strip leaked prompt instructions from the formatter output."""
+    # Cut at the first "### INSTRUCTIONS" block that the model echoes back
+    marker = "### INSTRUCTIONS"
+    idx = raw.find(marker)
+    if idx != -1:
+        raw = raw[:idx]
+    # Also cut at "Rules:" if it appears after the main answer body
+    # (only if it looks like leaked prompt, i.e. followed by "* " bullets)
+    rules_match = re.search(r"\nRules:\n\*\s", raw)
+    if rules_match:
+        raw = raw[:rules_match.start()]
+    return raw.strip()
+
+
 # ── abstract base ─────────────────────────────────────────────────────
 class BaseCritic(ABC):
     """Interface every Critic implementation must follow."""
@@ -71,6 +87,11 @@ class BaseCritic(ABC):
     @abstractmethod
     def generate_fallback_answer(self, question: str) -> str:
         """Produce a general-knowledge answer when the document fails."""
+        ...
+
+    @abstractmethod
+    def format_answer(self, question: str, excerpt: str) -> str:
+        """Restructure a validated excerpt into a clean, readable answer."""
         ...
 
 
@@ -216,6 +237,48 @@ based on general knowledge..."
         prompt = self._FALLBACK_PROMPT.format(question=question)
         return self._call_with_retry(prompt)
 
+    # ── answer formatting ────────────────────────────────────────────
+    _FORMAT_PROMPT = """\
+You are a teaching assistant that restructures raw textbook excerpts into
+clear, student-friendly answers.  You may ONLY use information present in
+the Excerpt — do NOT add outside knowledge.
+
+### QUESTION
+{question}
+
+### EXCERPT
+{excerpt}
+
+### INSTRUCTIONS
+Rewrite the excerpt into a structured answer using **exactly** this format
+(omit any section that does not apply):
+
+**Definition:**
+A clear 2-3 sentence explanation answering the question.
+
+**Syntax / Formula:**
+Code block or mathematical notation (only if relevant).
+
+**Key Points:**
+- Bullet 1
+- Bullet 2
+- Bullet 3
+
+**Example:**
+A concrete example from the excerpt (only if one exists).
+
+Rules:
+* Keep it concise — no filler, no repetition.
+* Use simple language a beginner can understand.
+* If the excerpt contains code, preserve it exactly in a code block.
+* Do NOT invent information not in the excerpt.
+"""
+
+    def format_answer(self, question: str, excerpt: str) -> str:
+        prompt = self._FORMAT_PROMPT.format(question=question, excerpt=excerpt)
+        raw = self._call_with_retry(prompt)
+        return _clean_formatted_answer(raw)
+
 
 # ── Gemma implementation (local SLM via Ollama) ──────────────────────
 class GemmaCritic(BaseCritic):
@@ -245,13 +308,19 @@ class GemmaCritic(BaseCritic):
         )
 
     # ── Ollama REST call ──────────────────────────────────────────────
-    def _call_with_retry(self, prompt: str) -> str:
-        """Call the Ollama /api/generate endpoint with retry logic."""
+    def _call_ollama(self, prompt: str, model: str | None = None) -> str:
+        """Call the Ollama /api/generate endpoint with retry logic.
+
+        Parameters
+        ----------
+        model : str, optional
+            Override the model name (e.g. use base model for formatting).
+        """
         import requests  # lazily imported so non-Gemma users don't need it
 
         url = f"{self.base_url}/api/generate"
         payload = {
-            "model": self.model_name,
+            "model": model or self.model_name,
             "prompt": prompt,
             "stream": False,
         }
@@ -271,11 +340,15 @@ class GemmaCritic(BaseCritic):
                     time.sleep(wait)
                 else:
                     raise RuntimeError(
-                        f"Ollama ({self.model_name}) failed after {self._max_retries} "
-                        f"attempts: {exc}"
+                        f"Ollama ({model or self.model_name}) failed after "
+                        f"{self._max_retries} attempts: {exc}"
                     ) from exc
         # unreachable, but keeps type-checkers happy
         return ""
+
+    def _call_with_retry(self, prompt: str) -> str:
+        """Call using the fine-tuned critic model."""
+        return self._call_ollama(prompt)
 
     # ── validation prompt ─────────────────────────────────────────────
     _VALIDATE_PROMPT = """\
@@ -325,6 +398,42 @@ based on general knowledge..."
         prompt = self._FALLBACK_PROMPT.format(question=question)
         return self._call_with_retry(prompt)
 
+    # ── answer formatting ────────────────────────────────────────────
+    _FORMAT_PROMPT = """\
+You are a teaching assistant. Restructure the excerpt below into a clean,
+student-friendly answer. ONLY use information in the excerpt — no outside
+knowledge. Output ONLY the formatted answer, nothing else.
+
+Question: {question}
+
+Excerpt: {excerpt}
+
+Format (omit sections that don't apply):
+
+**Definition:**
+2-3 sentence explanation.
+
+**Syntax / Formula:**
+Code or math notation (if relevant).
+
+**Key Points:**
+- Point 1
+- Point 2
+- Point 3
+
+**Example:**
+Concrete example (if present in excerpt).
+
+ANSWER:
+"""
+
+    def format_answer(self, question: str, excerpt: str) -> str:
+        prompt = self._FORMAT_PROMPT.format(question=question, excerpt=excerpt)
+        # Use the base Gemma model for formatting — the fine-tuned critic
+        # model is trained to output JSON validation, not prose.
+        raw = self._call_ollama(prompt, model="gemma3:4b")
+        return _clean_formatted_answer(raw)
+
 
 # ── Mock implementation (offline / tests) ────────────────────────────
 class MockCritic(BaseCritic):
@@ -350,6 +459,9 @@ class MockCritic(BaseCritic):
             "[MockCritic] This is a placeholder fallback answer for: "
             f"{question}"
         )
+
+    def format_answer(self, question: str, excerpt: str) -> str:
+        return f"**Definition:**\n{excerpt[:300]}"
 
 
 # ── factory ──────────────────────────────────────────────────────────

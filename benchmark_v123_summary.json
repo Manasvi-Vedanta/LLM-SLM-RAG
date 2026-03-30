@@ -1,0 +1,44 @@
+{
+  "gemma3-critic": {
+    "backend": "gemma3-critic",
+    "total_questions": 25,
+    "json_valid_rate": 100.0,
+    "avg_confidence_all": 66.8,
+    "avg_confidence_in_scope": 67.0,
+    "avg_confidence_out_scope": 66.0,
+    "scope_accuracy": 80.0,
+    "document_answer_rate": 0.0,
+    "avg_latency_s": 3.55,
+    "p50_latency_s": 3.4,
+    "max_latency_s": 6.47,
+    "error_rate": 0.0
+  },
+  "gemma3-critic-v2": {
+    "backend": "gemma3-critic-v2",
+    "total_questions": 25,
+    "json_valid_rate": 100.0,
+    "avg_confidence_all": 84.4,
+    "avg_confidence_in_scope": 87.5,
+    "avg_confidence_out_scope": 71.8,
+    "scope_accuracy": 80.0,
+    "document_answer_rate": 100.0,
+    "avg_latency_s": 3.53,
+    "p50_latency_s": 3.38,
+    "max_latency_s": 6.78,
+    "error_rate": 0.0
+  },
+  "gemma3criticv3ggufq4": {
+    "backend": "gemma3criticv3ggufq4",
+    "total_questions": 25,
+    "json_valid_rate": 100.0,
+    "avg_confidence_all": 41.1,
+    "avg_confidence_in_scope": 50.0,
+    "avg_confidence_out_scope": 5.6,
+    "scope_accuracy": 80.0,
+    "document_answer_rate": 10.0,
+    "avg_latency_s": 5.4,
+    "p50_latency_s": 2.93,
+    "max_latency_s": 24.91,
+    "error_rate": 0.0
+  }
+}

@@ -70,7 +70,7 @@ GEMINI_FALLBACK_MODELS = [
 # ── Ollama / Gemma (local SLM) ──
 # Use "gemma3:4b"       for the base (non-fine-tuned) model
 # Use "gemma3-critic"   for the fine-tuned model (after running finetune.py)
-OLLAMA_MODEL_NAME = "gemma3-critic-v2"
+OLLAMA_MODEL_NAME = "gemma3-critic-v3-new"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # ──────────────────────────────────────────────

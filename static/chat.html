@@ -127,6 +127,42 @@
             inputEl.focus();
         }
 
+        // ── Simple markdown → HTML renderer ─────────────────────────
+        function renderMarkdown(text) {
+            let html = text
+                // Escape HTML first to prevent XSS
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            // Code blocks (```...```)
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g,
+                '<pre><code>$2</code></pre>');
+
+            // Inline code (`...`)
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+            // Bold (**...**)
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+            // Italic (*...*)
+            html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+            // Unordered list items (- ...)
+            html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+            html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+            // Paragraphs (double newlines)
+            html = html.replace(/\n\n+/g, '</p><p>');
+            html = html.replace(/\n/g, '<br>');
+            html = '<p>' + html + '</p>';
+
+            // Clean up empty paragraphs
+            html = html.replace(/<p>\s*<\/p>/g, '');
+
+            return html;
+        }
+
         // ── Append a chat bubble ────────────────────────────────────
         function appendMessage(role, text, source = '', metadata = {}) {
             const wrapper = document.createElement('div');
@@ -138,7 +174,11 @@
 
             const bubble = document.createElement('div');
             bubble.className = 'message-bubble';
-            bubble.textContent = text;
+            if (role === 'bot') {
+                bubble.innerHTML = renderMarkdown(text);
+            } else {
+                bubble.textContent = text;
+            }
 
             wrapper.appendChild(label);
             wrapper.appendChild(bubble);

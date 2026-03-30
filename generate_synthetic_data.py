@@ -314,10 +314,10 @@ def generate_examples_for_question(
         return []
 
     examples = []
-    for chunk, score in zip(
+    for rank, (chunk, score) in enumerate(zip(
         retrieval.chunks[:max_chunks],
         retrieval.scores[:max_chunks],
-    ):
+    )):
         excerpt = chunk.page_content
         source_file = chunk.metadata.get("source", "unknown")
         page = chunk.metadata.get("page", "?")
@@ -339,6 +339,7 @@ def generate_examples_for_question(
             "page": page,
             "similarity": round(score, 4),
             "keyword_overlap": round(keyword_overlap, 3),
+            "chunk_rank": rank,
             "is_in_scope": is_in_scope,
             "label_source": "synthetic",
         })
@@ -355,6 +356,21 @@ def generate_augmented_questions() -> List[Tuple[str, bool]]:
     return augmented
 
 
+def load_question_bank(path: str) -> List[Tuple[str, bool]]:
+    """
+    Load questions from a JSON file.
+    Expected format: [{"question": "...", "is_in_scope": true/false}, ...]
+    """
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    questions = [(item["question"], item["is_in_scope"]) for item in data]
+    in_scope = sum(1 for _, s in questions if s)
+    out_scope = len(questions) - in_scope
+    logger.info("Loaded %d questions from %s  (in-scope: %d, out-scope: %d)",
+                len(questions), path, in_scope, out_scope)
+    return questions
+
+
 def main() -> None:
     import argparse
 
@@ -362,26 +378,28 @@ def main() -> None:
         description="Generate synthetic training data (no API calls needed)."
     )
     parser.add_argument(
-        "--out", type=str, default="training_data.jsonl",
-        help="Output JSONL file (appends to existing). Default: training_data.jsonl",
+        "--out", type=str, default="training_data_v3.jsonl",
+        help="Output JSONL file. Default: training_data_v3.jsonl",
     )
     parser.add_argument(
-        "--chunks-per-question", type=int, default=3,
-        help="Max chunks per question (default: 3).",
+        "--questions", type=str, default=None,
+        help="Path to a JSON question bank file. If not provided, uses built-in questions.",
+    )
+    parser.add_argument(
+        "--chunks-per-question", type=int, default=1,
+        help="Max chunks per question (default: 1 — top retrieval match only).",
     )
     parser.add_argument(
         "--no-augment", action="store_true",
         help="Skip paraphrase augmentation.",
     )
+    parser.add_argument(
+        "--append", action="store_true",
+        help="Append to existing file instead of overwriting.",
+    )
     args = parser.parse_args()
 
     output_path = Path(args.out)
-
-    # Count existing examples
-    existing = 0
-    if output_path.exists():
-        existing = sum(1 for _ in open(output_path, encoding="utf-8"))
-        logger.info("Existing examples in %s: %d", output_path, existing)
 
     # Load vector store
     logger.info("Loading FAISS index …")
@@ -389,10 +407,14 @@ def main() -> None:
 
     # Build question list
     all_questions: List[Tuple[str, bool]] = []
-    for q in IN_SCOPE_QUESTIONS:
-        all_questions.append((q, True))
-    for q in OUT_OF_SCOPE_QUESTIONS:
-        all_questions.append((q, False))
+
+    if args.questions:
+        all_questions = load_question_bank(args.questions)
+    else:
+        for q in IN_SCOPE_QUESTIONS:
+            all_questions.append((q, True))
+        for q in OUT_OF_SCOPE_QUESTIONS:
+            all_questions.append((q, False))
 
     if not args.no_augment:
         augmented = generate_augmented_questions()
@@ -404,7 +426,8 @@ def main() -> None:
 
     # Generate
     count = 0
-    with open(output_path, "a", encoding="utf-8") as f:
+    mode = "a" if args.append else "w"
+    with open(output_path, mode, encoding="utf-8") as f:
         for i, (question, is_in_scope) in enumerate(all_questions, 1):
             examples = generate_examples_for_question(
                 vs, question, is_in_scope, max_chunks=args.chunks_per_question,
@@ -416,11 +439,7 @@ def main() -> None:
             if i % 10 == 0:
                 logger.info("Processed %d/%d questions (%d examples so far)", i, len(all_questions), count)
 
-    total = existing + count
-    print(f"\nDone!  Generated {count} synthetic examples.")
-    print(f"Total examples in {output_path}: {total}")
-    print(f"  - Gemini-labelled: {existing}")
-    print(f"  - Synthetic: {count}")
+    print(f"\nDone!  Generated {count} examples → {output_path}")
     print(f"\nNext step:  python finetune.py --data {output_path}")
 
 

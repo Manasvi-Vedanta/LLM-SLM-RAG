@@ -132,14 +132,15 @@ class RAGPipeline:
         )
 
         # ---- Step 4: Confidence gate ---------------------------------------
-        if critic_result.confidence >= self.confidence_threshold:
-            # HIGH confidence → return the exact excerpt (no LLM rewriting)
+        if critic_result.confidence > self.confidence_threshold:
+            # HIGH confidence → format the excerpt into a structured answer
             source_file = retrieval.best_chunk.metadata.get("source", "unknown")  # type: ignore[union-attr]
             page = retrieval.best_chunk.metadata.get("page", "?")  # type: ignore[union-attr]
-            logger.info("✅ High confidence – returning document excerpt.")
+            logger.info("✅ High confidence – formatting document excerpt.")
+            formatted_answer = self.critic.format_answer(question, excerpt)
             return QueryResult(
                 question=question,
-                answer=excerpt,
+                answer=formatted_answer,
                 source="document",
                 retrieval=retrieval,
                 critic_result=critic_result,
