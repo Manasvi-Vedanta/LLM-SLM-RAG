@@ -47,7 +47,10 @@
             <div class="sidebar-section" id="sessions-panel" style="display:none;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <h4>Sessions</h4>
-                    <button class="btn btn-ghost btn-sm" id="mastery-btn" title="View mastery">Mastery</button>
+                    <div style="display:flex; gap:0.25rem;">
+                        <button class="btn btn-ghost btn-sm" id="mastery-btn" title="View mastery">Mastery</button>
+                        <button class="btn btn-ghost btn-sm" id="analytics-btn" title="Learning analytics">Analytics</button>
+                    </div>
                 </div>
                 <div id="session-list" class="session-list"></div>
                 <button class="btn btn-secondary btn-sm" id="adapt-btn" style="margin-top:0.75rem; width:100%;">Adapt Path</button>
@@ -117,6 +120,20 @@
                     <h3>Adapted Path</h3>
                 </div>
                 <pre class="log-output" id="adapt-log"></pre>
+            </div>
+
+            <!-- Analytics panel -->
+            <div class="learn-panel" id="panel-analytics" style="display:none;">
+                <div class="panel-header">
+                    <h3>Learning Analytics</h3>
+                    <div class="analytics-tabs">
+                        <button class="analytics-tab active" data-tab="review">Review Queue</button>
+                        <button class="analytics-tab" data-tab="transfer">Transfer</button>
+                        <button class="analytics-tab" data-tab="calibration">Calibration</button>
+                        <button class="analytics-tab" data-tab="load">Cognitive Load</button>
+                    </div>
+                </div>
+                <div id="analytics-content"><p style="color:var(--text-muted);">Loading...</p></div>
             </div>
 
         </main>
@@ -316,10 +333,31 @@
                     : 'Out of Scope';
                 const sourceClass = data.source;
 
+                let citationsHtml = '';
+                const citations = (data.metadata && data.metadata.citations) || [];
+                if (citations.length) {
+                    citationsHtml = '<div class="citation-pills">';
+                    citations.forEach((c, idx) => {
+                        const label = c.source_file || c.resource_name || `Chunk ${c.chunk_index}`;
+                        const pageInfo = c.page ? ` p.${c.page}` : '';
+                        const score = typeof c.similarity_score === 'number'
+                            ? ` · ${(c.similarity_score * 100).toFixed(0)}%` : '';
+                        const safePreview = (c.preview || '')
+                            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                            .replace(/"/g, '&quot;');
+                        citationsHtml += `<span class="citation-pill" title="${safePreview}">
+                            [${idx + 1}] ${label}${pageInfo}${score}</span>`;
+                    });
+                    citationsHtml += '</div>';
+                }
+
                 msgs.innerHTML += `
                     <div class="study-msg bot">
                         <div class="study-msg-content">${renderMarkdown(data.answer)}</div>
-                        <span class="source-badge ${sourceClass}" style="margin-top:0.5rem;">${sourceLabel}</span>
+                        <div class="bot-msg-footer">
+                            <span class="source-badge ${sourceClass}">${sourceLabel}</span>
+                        </div>
+                        ${citationsHtml}
                     </div>`;
             } catch (err) {
                 const typing = msgs.querySelector('.typing');
@@ -481,15 +519,32 @@
             document.getElementById('quiz-progress').textContent = `0/${data.total_questions}`;
             let html = '<form id="quiz-form">';
 
+            // ZPD summary header: current mastery + Bloom distribution
+            if (typeof data.current_mastery === 'number' || data.bloom_distribution) {
+                const masteryTxt = typeof data.current_mastery === 'number'
+                    ? `${data.current_mastery.toFixed(0)}%` : 'n/a';
+                const bloomParts = Object.entries(data.bloom_distribution || {})
+                    .map(([lvl, n]) => `<span class="bloom-chip bloom-${lvl}">${lvl} × ${n}</span>`)
+                    .join('');
+                html += `<div class="quiz-zpd-banner">
+                    <div><span class="zpd-label">Current mastery</span>
+                         <strong>${masteryTxt}</strong></div>
+                    <div class="zpd-blooms">${bloomParts || '<span class="zpd-label">mixed</span>'}</div>
+                </div>`;
+            }
+
             data.questions.forEach((q, i) => {
                 const srcBadge = q.source === 'your_materials'
                     ? '<span class="source-badge document">Materials</span>'
                     : '<span class="source-badge general_knowledge">General</span>';
+                const bloomBadge = q.bloom_level
+                    ? `<span class="bloom-chip bloom-${q.bloom_level}">${q.bloom_level}</span>` : '';
 
                 html += `<div class="quiz-question">
                     <div class="quiz-q-header">
                         <strong>Q${i + 1}</strong> ${srcBadge}
                         <span class="badge badge-muted">${q.difficulty}</span>
+                        ${bloomBadge}
                     </div>`;
 
                 if (q.reference_text) {
@@ -519,11 +574,29 @@
                 html += '</div>';
             });
 
+            // Self-confidence slider (metacognitive calibration)
+            html += `<div class="confidence-slider-card">
+                <label for="self-confidence">
+                    How confident are you in your answers overall?
+                    <strong id="conf-value">50</strong>%
+                </label>
+                <input type="range" id="self-confidence" min="0" max="100" step="5" value="50">
+                <div class="conf-scale">
+                    <span>Not confident</span><span>Very confident</span>
+                </div>
+            </div>`;
+
             html += '<button type="submit" class="btn btn-primary" style="margin-top:1rem;">Submit Answers</button>';
             html += '</form>';
             container.innerHTML = html;
 
             document.getElementById('quiz-form').addEventListener('submit', submitQuiz);
+
+            const slider = document.getElementById('self-confidence');
+            const confValue = document.getElementById('conf-value');
+            if (slider && confValue) {
+                slider.addEventListener('input', () => { confValue.textContent = slider.value; });
+            }
         }
 
         async function submitQuiz(e) {
@@ -541,12 +614,15 @@
                 }
             });
 
+            const slider = document.getElementById('self-confidence');
+            const self_confidence = slider ? Number(slider.value) : null;
+
             document.getElementById('quiz-content').innerHTML = '<p>Grading your answers...</p>';
 
             try {
                 const res = await authFetch(`/api/quiz/${activePathId}/${activeSessionNumber}/submit`, {
                     method: 'POST',
-                    body: JSON.stringify({ answers }),
+                    body: JSON.stringify({ answers, self_confidence }),
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail);
@@ -623,14 +699,35 @@
                     </div>`;
 
                 if (data.skills.length > 0) {
+                    html += `<p class="mastery-note">
+                        <strong>Raw</strong> = weighted running average of quiz scores;
+                        <strong>Decayed</strong> = raw × Ebbinghaus forgetting curve
+                        (exp(-λ·days since assessed)). The decayed value is what drives
+                        review scheduling and path adaptation.
+                    </p>`;
                     html += '<div class="mastery-skills">';
                     data.skills.forEach(s => {
+                        const raw = typeof s.score === 'number' ? s.score : 0;
+                        const decayed = typeof s.decayed_score === 'number' ? s.decayed_score : raw;
+                        const days = (s.days_since_assessed != null)
+                            ? `${Number(s.days_since_assessed).toFixed(1)}d ago` : 'never';
+                        const reviewFlag = s.needs_review
+                            ? '<span class="review-flag" title="Decay has pushed this skill below threshold — time to review.">needs review</span>'
+                            : '';
                         html += `<div class="mastery-skill-row">
-                            <span class="mastery-skill-name">${s.skill}</span>
-                            <div class="mastery-bar-bg">
-                                <div class="mastery-bar ${s.status}" style="width:${Math.min(100, s.score)}%"></div>
+                            <span class="mastery-skill-name">${s.skill} ${reviewFlag}</span>
+                            <div class="mastery-bar-stack">
+                                <div class="mastery-bar-bg">
+                                    <div class="mastery-bar ${s.status}" style="width:${Math.min(100, raw)}%"></div>
+                                    <div class="mastery-bar-decay" style="width:${Math.min(100, decayed)}%"
+                                         title="Decayed score"></div>
+                                </div>
+                                <span class="mastery-days">${days}</span>
                             </div>
-                            <span class="mastery-skill-score">${s.score}%</span>
+                            <span class="mastery-skill-score">
+                                <strong>${raw.toFixed ? raw.toFixed(0) : raw}%</strong>
+                                <small>${decayed.toFixed ? decayed.toFixed(0) : decayed}%</small>
+                            </span>
                         </div>`;
                     });
                     html += '</div>';
@@ -663,6 +760,200 @@
                 document.getElementById('adapt-log').textContent = `Error: ${err.message}`;
             }
         });
+
+        // ── Analytics ───────────────────────────────────────────────
+        let currentAnalyticsTab = 'review';
+
+        document.getElementById('analytics-btn').addEventListener('click', () => {
+            if (!activePathId) return;
+            showPanel('panel-analytics');
+            loadAnalyticsTab(currentAnalyticsTab);
+        });
+
+        document.querySelectorAll('.analytics-tab').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.analytics-tab').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentAnalyticsTab = btn.dataset.tab;
+                loadAnalyticsTab(currentAnalyticsTab);
+            });
+        });
+
+        async function loadAnalyticsTab(tab) {
+            const box = document.getElementById('analytics-content');
+            box.innerHTML = '<p style="color:var(--text-muted);">Loading...</p>';
+            try {
+                if (tab === 'review') await renderReviewQueue(box);
+                else if (tab === 'transfer') await renderTransfer(box);
+                else if (tab === 'calibration') await renderCalibration(box);
+                else if (tab === 'load') await renderCognitiveLoad(box);
+            } catch (err) {
+                box.innerHTML = `<p class="error">Error: ${err.message}</p>`;
+            }
+        }
+
+        async function renderReviewQueue(box) {
+            const res = await authFetch(`/api/review-schedule/${activePathId}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Failed to load review schedule');
+            const items = data.items || [];
+            let html = '<div class="analytics-section-header">Spaced Repetition Queue</div>';
+            html += '<p class="analytics-note">Next review date is derived from Ebbinghaus decay: next_review = ln(S/T)/λ days after last assessment, where S is the decayed score and T is the review threshold.</p>';
+            html += `<div class="calibration-stats" style="grid-template-columns:repeat(4,1fr);">
+                <div><span>Overdue</span><strong>${data.overdue_count ?? 0}</strong></div>
+                <div><span>Due today</span><strong>${data.due_today_count ?? 0}</strong></div>
+                <div><span>This week</span><strong>${data.due_this_week_count ?? 0}</strong></div>
+                <div><span>Scheduled</span><strong>${data.scheduled_count ?? 0}</strong></div>
+            </div>`;
+            if (!items.length) {
+                html += '<p style="color:var(--text-muted);">No skills in the queue yet. Complete quizzes to populate your spaced-repetition schedule.</p>';
+                box.innerHTML = html;
+                return;
+            }
+            html += '<div class="review-queue-list">';
+            items.forEach(it => {
+                const due = (it.days_until_review != null) ? Number(it.days_until_review) : 0;
+                const overdue = due < 0 || it.urgency === 'overdue';
+                const dueLabel = overdue
+                    ? `overdue by ${Math.abs(due).toFixed(1)}d`
+                    : (due < 1 ? `due today` : `due in ${due.toFixed(1)}d`);
+                const cls = overdue ? 'overdue' : (due < 1 ? 'soon' : 'later');
+                const dec = (it.decayed_score != null) ? Number(it.decayed_score).toFixed(0) : '—';
+                const raw = (it.mastery_score != null) ? Number(it.mastery_score).toFixed(0) : '—';
+                html += `<div class="review-row ${cls}">
+                    <span class="review-skill">${it.skill || 'unknown'}</span>
+                    <span class="review-scores">raw ${raw}% · decayed ${dec}%</span>
+                    <span class="review-due">${dueLabel}</span>
+                </div>`;
+            });
+            html += '</div>';
+            box.innerHTML = html;
+        }
+
+        async function renderTransfer(box) {
+            const res = await authFetch(`/api/transfer/${activePathId}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Failed to load transfer data');
+            const prereqs = data.per_prerequisite || [];
+            let html = '<div class="analytics-section-header">Knowledge Transfer</div>';
+            html += '<p class="analytics-note">Per-prerequisite transfer: how prior skill mastery predicts dependent-session performance. Pearson r summarises the full correlation across the path DAG.</p>';
+            const r = (typeof data.correlation === 'number') ? data.correlation.toFixed(2) : '—';
+            html += `<div class="calibration-stats" style="grid-template-columns:repeat(3,1fr);">
+                <div><span>Samples</span><strong>${data.sample_count ?? 0}</strong></div>
+                <div><span>Pearson r</span><strong>${r}</strong></div>
+                <div><span>Weak chains</span><strong>${(data.weak_chains || []).length}</strong></div>
+            </div>`;
+            if (!prereqs.length) {
+                html += '<p style="color:var(--text-muted);">No transfer pairs detected yet. Complete more sessions with prerequisites.</p>';
+                box.innerHTML = html;
+                return;
+            }
+            html += '<div class="transfer-list">';
+            prereqs.forEach(t => {
+                const ts = (t.transfer_score != null ? Number(t.transfer_score) : 0);
+                const w = ts <= 1 ? ts * 100 : ts;  // tolerate 0-1 or 0-100
+                const deps = Array.isArray(t.dependent_sessions)
+                    ? `S${t.dependent_sessions.join(', S')}`
+                    : (t.dependent_sessions || '?');
+                html += `<div class="transfer-edge">
+                    <span class="transfer-from">${t.prerequisite || '?'}</span>
+                    <span class="transfer-arrow">→</span>
+                    <span class="transfer-to">${deps}</span>
+                    <div class="transfer-bar-bg">
+                        <div class="transfer-bar" style="width:${Math.min(100, Math.max(0, w))}%"></div>
+                    </div>
+                    <span class="transfer-weight">${w.toFixed(0)}%</span>
+                </div>`;
+            });
+            html += '</div>';
+            box.innerHTML = html;
+        }
+
+        async function renderCalibration(box) {
+            const res = await authFetch(`/api/calibration/${activePathId}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Failed to load calibration');
+
+            const points = data.points || [];
+            const mg = typeof data.mean_gap === 'number' ? data.mean_gap.toFixed(1) : '—';
+            const mag = typeof data.mean_abs_gap === 'number' ? data.mean_abs_gap.toFixed(1) : '—';
+            const r = typeof data.correlation === 'number' ? data.correlation.toFixed(2) : '—';
+            const pattern = data.pattern || 'insufficient data';
+
+            let html = '<div class="analytics-section-header">Metacognitive Calibration</div>';
+            html += `<p class="analytics-note">Gap = self-confidence − actual score. Positive = overconfident, negative = underconfident. Diagonal = perfect calibration.</p>`;
+            html += `<div class="calibration-stats">
+                <div><span>Mean gap</span><strong>${mg}</strong></div>
+                <div><span>Mean |gap|</span><strong>${mag}</strong></div>
+                <div><span>Pearson r</span><strong>${r}</strong></div>
+                <div><span>Pattern</span><strong class="pattern-${pattern.replace(/\s/g, '-')}">${pattern}</strong></div>
+            </div>`;
+
+            // SVG scatter plot
+            const W = 420, H = 320, pad = 40;
+            const innerW = W - pad * 2, innerH = H - pad * 2;
+            const sx = v => pad + (v / 100) * innerW;
+            const sy = v => H - pad - (v / 100) * innerH;
+
+            let svg = `<svg class="calibration-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+                <rect x="${pad}" y="${pad}" width="${innerW}" height="${innerH}" class="cal-frame"/>`;
+            // grid lines
+            for (let g = 0; g <= 100; g += 20) {
+                svg += `<line x1="${sx(g)}" y1="${pad}" x2="${sx(g)}" y2="${H - pad}" class="cal-grid"/>`;
+                svg += `<line x1="${pad}" y1="${sy(g)}" x2="${W - pad}" y2="${sy(g)}" class="cal-grid"/>`;
+                svg += `<text x="${sx(g)}" y="${H - pad + 14}" class="cal-axis-label" text-anchor="middle">${g}</text>`;
+                svg += `<text x="${pad - 6}" y="${sy(g) + 3}" class="cal-axis-label" text-anchor="end">${g}</text>`;
+            }
+            // identity diagonal
+            svg += `<line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(100)}" y2="${sy(100)}" class="cal-diagonal"/>`;
+            // points
+            points.forEach(p => {
+                const c = p.self_confidence;
+                const s = (p.actual_percentage != null) ? p.actual_percentage : p.percentage;
+                if (c == null || s == null) return;
+                svg += `<circle cx="${sx(c)}" cy="${sy(s)}" r="5" class="cal-dot"/>`;
+            });
+            // axis titles
+            svg += `<text x="${W / 2}" y="${H - 6}" class="cal-axis-title" text-anchor="middle">Self-confidence (%)</text>`;
+            svg += `<text x="12" y="${H / 2}" class="cal-axis-title" text-anchor="middle" transform="rotate(-90 12 ${H / 2})">Actual score (%)</text>`;
+            svg += '</svg>';
+
+            html += svg;
+
+            if (!points.length) {
+                html += '<p style="color:var(--text-muted);">Submit quizzes with confidence ratings to populate this chart.</p>';
+            }
+            box.innerHTML = html;
+        }
+
+        async function renderCognitiveLoad(box) {
+            const res = await authFetch(`/api/cognitive-load/${activePathId}`);
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || 'Failed to load cognitive load');
+            const sessions = data.sessions || [];
+            let html = '<div class="analytics-section-header">Cognitive Load by Session</div>';
+            html += '<p class="analytics-note">Composite of study duration, doubt-query count, and quiz mistakes (Sweller\'s intrinsic + extraneous load). High = this session is taxing you — consider shorter sittings or remediation.</p>';
+            if (!sessions.length) {
+                html += '<p style="color:var(--text-muted);">No cognitive-load data yet. Study and quiz a few sessions first.</p>';
+                box.innerHTML = html;
+                return;
+            }
+            html += '<div class="load-bars">';
+            sessions.forEach(s => {
+                const score = (s.load_score != null) ? Number(s.load_score) : 0;
+                const lvl = s.load_level || 'moderate';
+                html += `<div class="load-row">
+                    <span class="load-session">S${s.session_number || '?'}</span>
+                    <div class="load-bar-bg">
+                        <div class="load-bar load-${lvl}" style="width:${Math.min(100, score)}%"></div>
+                    </div>
+                    <span class="load-level load-${lvl}">${lvl}</span>
+                    <span class="load-score">${score.toFixed(0)}</span>
+                </div>`;
+            });
+            html += '</div>';
+            box.innerHTML = html;
+        }
 
         // ── Init ────────────────────────────────────────────────────
         loadAvailablePaths();

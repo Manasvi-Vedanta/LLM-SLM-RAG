@@ -54,15 +54,37 @@ a:hover {
     color: var(--accent-hover);
 }
 
-/* ── Three.js Canvas ─────────────────────────────────────────────── */
-#three-canvas {
+/* ── Minimalist background ────────────────────────────────────────
+   Professional, minimal, pure-CSS: a deep base colour, two large soft
+   radial highlights for subtle depth, and a fine dot grid overlay. No
+   animation, no WebGL. `#three-canvas` (kept for backwards compat) is
+   simply hidden — the body pseudo-elements provide the background.     */
+#three-canvas { display: none; }
+
+body::before,
+body::after {
+    content: '';
     position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+    inset: 0;
     z-index: 0;
     pointer-events: none;
+}
+
+body::before {
+    background:
+        radial-gradient(ellipse 60% 50% at 15% 10%,
+            rgba(108, 99, 255, 0.08), transparent 60%),
+        radial-gradient(ellipse 55% 45% at 85% 95%,
+            rgba(0, 212, 170, 0.055), transparent 60%),
+        linear-gradient(180deg, #07070c 0%, #0a0a12 100%);
+}
+
+body::after {
+    background-image:
+        radial-gradient(circle at 1px 1px,
+            rgba(255, 255, 255, 0.035) 1px, transparent 1.5px);
+    background-size: 28px 28px;
+    opacity: 0.9;
 }
 
 /* ── Navigation Bar ──────────────────────────────────────────────── */
