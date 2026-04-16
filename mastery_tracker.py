@@ -1,14 +1,23 @@
 """
-mastery_tracker.py – Skill mastery tracking and readiness checks
------------------------------------------------------------------
-Aggregates per-skill mastery scores, checks prerequisite readiness,
-and provides summaries for path adaptation decisions.
+mastery_tracker.py – Skill mastery tracking with Ebbinghaus time-decay
+-----------------------------------------------------------------------
+Aggregates per-skill mastery scores, applies a forgetting-curve decay
+based on time since last assessment, checks prerequisite readiness, and
+provides summaries for path adaptation decisions.
+
+Decay formula:
+    decayed = max(FLOOR, raw_score * exp(-LAMBDA * days_since_assessed))
+
+Skills that have not been re-assessed in a long time have a "decayed"
+score that drops below the raw score, signalling a need for review.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 import config
 import database
@@ -22,9 +31,13 @@ logger = logging.getLogger(__name__)
 class SkillMastery:
     skill_label: str
     session_number: int
-    mastery_score: float          # 0-100
+    mastery_score: float          # 0-100 raw, as stored in DB
+    decayed_score: float          # raw_score after Ebbinghaus decay
     attempts_count: int
     status: str                   # "mastered", "review", "weak", "not_assessed"
+    last_assessed_at: str | None = None
+    days_since_assessed: float = 0.0
+    needs_review: bool = False    # True when decayed dropped below mastery threshold
 
 
 @dataclass
@@ -46,6 +59,35 @@ class MasterySummary:
     not_assessed_count: int
     overall_percentage: float
     skills: list[SkillMastery] = field(default_factory=list)
+
+
+# ── decay helpers ────────────────────────────────────────────────────
+
+def _apply_decay(raw_score: float, last_assessed_at: str | None) -> tuple[float, float]:
+    """Apply Ebbinghaus exponential decay to a raw mastery score.
+
+    Returns
+    -------
+    (decayed_score, days_since_assessed)
+    """
+    if not last_assessed_at or raw_score <= 0:
+        return raw_score, 0.0
+
+    try:
+        # SQLite CURRENT_TIMESTAMP format is "YYYY-MM-DD HH:MM:SS" (UTC, no tz)
+        assessed_dt = datetime.strptime(last_assessed_at, "%Y-%m-%d %H:%M:%S")
+        assessed_dt = assessed_dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return raw_score, 0.0
+
+    now = datetime.now(timezone.utc)
+    days = max(0.0, (now - assessed_dt).total_seconds() / 86400.0)
+    if days == 0:
+        return raw_score, 0.0
+
+    decayed = raw_score * math.exp(-config.MASTERY_DECAY_LAMBDA * days)
+    decayed = max(config.MASTERY_DECAY_FLOOR, decayed)
+    return decayed, days
 
 
 # ── mastery classification ───────────────────────────────────────────
@@ -77,18 +119,31 @@ def update_mastery(user_id: int, path_id: int, session_number: int,
 
 
 def get_skill_mastery(user_id: int, path_id: int) -> list[SkillMastery]:
-    """Get all mastery records for a learning path."""
+    """Get all mastery records for a learning path with decayed scores."""
     rows = database.get_skill_mastery(user_id, path_id)
-    return [
-        SkillMastery(
-            skill_label=r["skill_label"],
-            session_number=r["session_number"],
-            mastery_score=r["mastery_score"],
-            attempts_count=r["attempts_count"],
-            status=_classify_mastery(r["mastery_score"]),
+    result = []
+    for r in rows:
+        raw = r["mastery_score"]
+        last = r.get("last_assessed_at") if isinstance(r, dict) else r["last_assessed_at"]
+        decayed, days = _apply_decay(raw, last)
+        needs_review = (
+            raw >= config.MASTERY_THRESHOLD_SKIP
+            and decayed < config.MASTERY_THRESHOLD_SKIP
         )
-        for r in rows
-    ]
+        result.append(
+            SkillMastery(
+                skill_label=r["skill_label"],
+                session_number=r["session_number"],
+                mastery_score=raw,
+                decayed_score=decayed,
+                attempts_count=r["attempts_count"],
+                status=_classify_mastery(decayed),
+                last_assessed_at=last,
+                days_since_assessed=days,
+                needs_review=needs_review,
+            )
+        )
+    return result
 
 
 def get_session_readiness(
@@ -99,8 +154,8 @@ def get_session_readiness(
 ) -> ReadinessResult:
     """Check if prerequisite skills are mastered for a session.
 
-    Looks up the session's prerequisites, checks each prerequisite
-    skill's mastery score, and reports whether the user is ready.
+    Uses decayed mastery scores so a long-dormant prereq is flagged
+    even if its raw score is high.
     """
     sessions = corrected_path.get("learning_path", [])
     target_session = None
@@ -126,19 +181,24 @@ def get_session_readiness(
             unmet_prerequisites=[],
         )
 
-    # Get all mastery records
-    mastery_records = database.get_skill_mastery(user_id, path_id)
-    mastery_map = {r["skill_label"]: r["mastery_score"] for r in mastery_records}
+    # Use decayed scores from get_skill_mastery
+    mastery_records = get_skill_mastery(user_id, path_id)
+    mastery_map = {m.skill_label: m for m in mastery_records}
 
     unmet = []
     details = []
 
     for prereq in prerequisites:
-        score = mastery_map.get(prereq, 0.0)
-        status = _classify_mastery(score) if prereq in mastery_map else "not_assessed"
+        m = mastery_map.get(prereq)
+        if m is None:
+            score = 0.0
+            status = "not_assessed"
+        else:
+            score = m.decayed_score
+            status = m.status
         details.append({
             "skill": prereq,
-            "score": score,
+            "score": round(score, 1),
             "status": status,
         })
 
@@ -157,7 +217,7 @@ def get_session_readiness(
 
 
 def get_mastery_summary(user_id: int, path_id: int) -> MasterySummary:
-    """Aggregate mastery stats across all skills in a path."""
+    """Aggregate mastery stats across all skills in a path (decayed)."""
     records = get_skill_mastery(user_id, path_id)
 
     mastered = sum(1 for r in records if r.status == "mastered")
@@ -167,7 +227,7 @@ def get_mastery_summary(user_id: int, path_id: int) -> MasterySummary:
     total = len(records)
 
     overall = (
-        sum(r.mastery_score for r in records) / total
+        sum(r.decayed_score for r in records) / total
         if total > 0
         else 0.0
     )

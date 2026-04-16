@@ -132,6 +132,18 @@ def init_db() -> None:
             )
         """)
 
+        # ── Schema migrations (idempotent ALTER TABLE blocks) ──
+        _migrations = [
+            "ALTER TABLE quiz_attempts ADD COLUMN self_confidence REAL",
+            "ALTER TABLE session_progress ADD COLUMN doubt_query_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE session_progress ADD COLUMN study_duration_seconds INTEGER NOT NULL DEFAULT 0",
+        ]
+        for stmt in _migrations:
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
 
 def create_user(username: str, email: str, hashed_password: str) -> int:
     """Insert a new user; returns their ID."""
@@ -263,7 +275,8 @@ def get_all_session_progress(path_id: int) -> list[dict]:
 
 
 def update_session_progress(path_id: int, session_number: int, **kwargs) -> None:
-    allowed = {"status", "vectorstore_built", "started_at", "completed_at"}
+    allowed = {"status", "vectorstore_built", "started_at", "completed_at",
+               "doubt_query_count", "study_duration_seconds"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
         return
@@ -282,15 +295,53 @@ def update_session_progress(path_id: int, session_number: int, **kwargs) -> None
 # ──────────────────────────────────────────────
 
 def create_quiz_attempt(path_id: int, session_number: int, user_id: int,
-                        attempt_number: int) -> int:
+                        attempt_number: int,
+                        self_confidence: float | None = None) -> int:
     with get_db() as conn:
         cursor = conn.execute(
             "INSERT INTO quiz_attempts "
-            "(path_id, session_number, user_id, attempt_number) "
-            "VALUES (?, ?, ?, ?)",
-            (path_id, session_number, user_id, attempt_number),
+            "(path_id, session_number, user_id, attempt_number, self_confidence) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (path_id, session_number, user_id, attempt_number, self_confidence),
         )
         return cursor.lastrowid  # type: ignore[return-value]
+
+
+def increment_doubt_count(path_id: int, session_number: int) -> None:
+    """Increment the doubt-query counter for a session (cognitive-load signal)."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE session_progress "
+            "SET doubt_query_count = doubt_query_count + 1 "
+            "WHERE path_id = ? AND session_number = ?",
+            (path_id, session_number),
+        )
+
+
+def get_calibration_data(user_id: int, path_id: int) -> list[dict]:
+    """Return (self_confidence, percentage) pairs across all quiz attempts
+    for the user+path — used for Dunning-Kruger / calibration analysis."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT session_number, attempt_number, self_confidence, percentage, created_at "
+            "FROM quiz_attempts "
+            "WHERE user_id = ? AND path_id = ? AND self_confidence IS NOT NULL "
+            "ORDER BY created_at",
+            (user_id, path_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_cognitive_load_data(path_id: int) -> list[dict]:
+    """Return per-session cognitive-load signals (doubt count + duration)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT session_number, title, doubt_query_count, "
+            "study_duration_seconds, status "
+            "FROM session_progress WHERE path_id = ? ORDER BY session_number",
+            (path_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def update_quiz_attempt(attempt_id: int, total_score: float,

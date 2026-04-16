@@ -37,6 +37,55 @@ class QuizQuestion:
     source: str                       # "your_materials" or "general_knowledge"
     source_excerpt: str = ""          # the chunk it was generated from (for grading)
     reference_text: str = ""          # excerpt/code/passage shown alongside question
+    bloom_level: str = ""             # Bloom's taxonomy cognitive level
+
+
+# ── Bloom's taxonomy / Zone of Proximal Development ──────────────────
+#
+# Bloom's six cognitive levels (remember -> create) ascend in complexity.
+# Vygotsky's Zone of Proximal Development (ZPD) says learners grow best
+# one step above their current mastery: too easy bores, too hard blocks.
+# We map observed mastery into a target Bloom window one level above the
+# learner's current comfort zone.
+
+BLOOM_LEVELS = ["remember", "understand", "apply", "analyze", "evaluate", "create"]
+
+BLOOM_DIFFICULTY_MAP = {
+    "remember":   "easy",
+    "understand": "easy",
+    "apply":      "medium",
+    "analyze":    "medium",
+    "evaluate":   "hard",
+    "create":     "hard",
+}
+
+
+def _get_bloom_levels_for_zpd(mastery_score: float | None,
+                              session_difficulty: str = "beginner") -> list[str]:
+    """Pick a two-level Bloom window that sits one step above current mastery.
+
+    Below 40% mastery -> remember/understand (build foundation).
+    40-70% -> understand/apply (consolidate).
+    70-85% -> apply/analyze (extend).
+    85%+  -> analyze/evaluate or evaluate/create depending on session depth.
+    """
+    if mastery_score is None:
+        base = {"beginner": ["remember", "understand"],
+                "intermediate": ["understand", "apply"],
+                "advanced": ["apply", "analyze"]}.get(session_difficulty,
+                                                      ["understand", "apply"])
+        return base
+
+    if mastery_score < 40:
+        return ["remember", "understand"]
+    if mastery_score < 70:
+        return ["understand", "apply"]
+    if mastery_score < 85:
+        return ["apply", "analyze"]
+    # Advanced ZPD: push into higher-order reasoning
+    if session_difficulty == "advanced":
+        return ["evaluate", "create"]
+    return ["analyze", "evaluate"]
 
 
 @dataclass
@@ -103,18 +152,24 @@ def _generate_general_knowledge_questions(
     critic: BaseCritic,
     n: int = 2,
     difficulty: str = "medium",
+    bloom_levels: list[str] | None = None,
 ) -> list[QuizQuestion]:
     """Generate supplementary questions from LLM knowledge (not document-grounded)."""
     import llm_service
 
+    bloom_hint = ""
+    if bloom_levels:
+        bloom_hint = f"Target Bloom's levels: {', '.join(bloom_levels)}.\n"
+
     prompt = f"""\
 Generate {n} quiz questions about {', '.join(skill_labels)}.
 Difficulty: {difficulty}. Mix of MCQ and open-ended.
-
+{bloom_hint}
 Return a JSON array where each object has:
 {{"question_text": "...", "type": "mcq" or "open",
   "options": {{"A":"..","B":"..","C":"..","D":".."}} or null,
   "correct_answer": "...", "difficulty": "{difficulty}",
+  "bloom_level": "<remember|understand|apply|analyze|evaluate|create>",
   "explanation": "..."}}
 
 ONLY output the JSON array:
@@ -135,6 +190,7 @@ ONLY output the JSON array:
                 explanation=item.get("explanation", ""),
                 source="general_knowledge",
                 source_excerpt="",
+                bloom_level=str(item.get("bloom_level", "")).lower(),
             ))
         return questions
     except Exception as exc:
@@ -150,6 +206,7 @@ def generate_session_quiz(
     critic: BaseCritic,
     n_mcq: int | None = None,
     n_open: int | None = None,
+    current_mastery: float | None = None,
 ) -> Quiz:
     """Generate a validated quiz for a session.
 
@@ -179,8 +236,12 @@ def generate_session_quiz(
     session_number = session.get("session_number", 0)
     difficulty = session.get("difficulty_level", "beginner")
 
-    logger.info("Generating quiz for session %s (%d MCQ + %d open)",
-                session_id, n_mcq, n_open)
+    # Compute ZPD-targeted Bloom levels from current mastery so the quiz
+    # sits one rung above the learner's current comfort zone.
+    bloom_levels = _get_bloom_levels_for_zpd(current_mastery, difficulty)
+
+    logger.info("Generating quiz for session %s (%d MCQ + %d open, ZPD=%s, mastery=%s)",
+                session_id, n_mcq, n_open, bloom_levels, current_mastery)
 
     # Load vectorstore
     try:
@@ -189,7 +250,8 @@ def generate_session_quiz(
         logger.warning("No vectorstore for session %s — using general knowledge only",
                        session_id)
         gk_questions = _generate_general_knowledge_questions(
-            skill_labels, critic, n=total_needed, difficulty=difficulty
+            skill_labels, critic, n=total_needed, difficulty=difficulty,
+            bloom_levels=bloom_levels,
         )
         return Quiz(
             session_id=session_id,
@@ -206,7 +268,8 @@ def generate_session_quiz(
     if not chunks:
         logger.warning("No chunks found for session %s", session_id)
         gk_questions = _generate_general_knowledge_questions(
-            skill_labels, critic, n=total_needed, difficulty=difficulty
+            skill_labels, critic, n=total_needed, difficulty=difficulty,
+            bloom_levels=bloom_levels,
         )
         return Quiz(
             session_id=session_id,
@@ -232,6 +295,7 @@ def generate_session_quiz(
             skill_label=primary_skill,
             difficulty=difficulty,
             n=2,
+            bloom_levels=bloom_levels,
         )
 
         for rq in raw_questions:
@@ -255,6 +319,7 @@ def generate_session_quiz(
                     source="your_materials",
                     source_excerpt=chunk.page_content,
                     reference_text=rq.get("reference_text", ""),
+                    bloom_level=str(rq.get("bloom_level", "")).lower(),
                 ))
 
     # Supplement with general knowledge if not enough document-grounded questions

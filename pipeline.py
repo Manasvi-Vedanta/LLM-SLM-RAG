@@ -34,6 +34,40 @@ from critic import BaseCritic, CriticResult
 logger = logging.getLogger(__name__)
 
 
+def _build_citations(retrieval: RetrievalResult, threshold: float,
+                     max_citations: int = 5) -> list[dict]:
+    """Return chunk-level citation records for every passing chunk.
+
+    Each citation carries a stable locator (source file + page / resource +
+    chunk index) plus a short preview so the UI can link to the exact
+    excerpt that was retrieved.
+    """
+    citations: list[dict] = []
+    if not retrieval.chunks:
+        return citations
+    for idx, (chunk, score) in enumerate(zip(retrieval.chunks, retrieval.scores)):
+        if score < threshold:
+            continue
+        meta = chunk.metadata or {}
+        text = chunk.page_content or ""
+        preview = text[:240].strip()
+        if len(text) > 240:
+            preview += "…"
+        citations.append({
+            "chunk_index": idx,
+            "similarity_score": round(float(score), 4),
+            "source_file": meta.get("source", meta.get("resource_name", "unknown")),
+            "source_type": meta.get("source_type", "unknown"),
+            "page": meta.get("page", ""),
+            "resource_name": meta.get("resource_name", ""),
+            "url": meta.get("url", ""),
+            "preview": preview,
+        })
+        if len(citations) >= max_citations:
+            break
+    return citations
+
+
 # ── value object ──────────────────────────────────────────────────────
 @dataclass
 class QueryResult:
@@ -138,6 +172,7 @@ class RAGPipeline:
             page = retrieval.best_chunk.metadata.get("page", "?")  # type: ignore[union-attr]
             logger.info("✅ High confidence – formatting document excerpt.")
             formatted_answer = self.critic.format_answer(question, excerpt)
+            citations = _build_citations(retrieval, self.similarity_threshold)
             return QueryResult(
                 question=question,
                 answer=formatted_answer,
@@ -149,6 +184,7 @@ class RAGPipeline:
                     "page": page,
                     "similarity_score": retrieval.best_score,
                     "confidence": critic_result.confidence,
+                    "citations": citations,
                 },
             )
         else:
@@ -227,6 +263,7 @@ class RAGPipeline:
         # Confidence gate
         if critic_result.confidence > self.confidence_threshold:
             formatted_answer = self.critic.format_answer(question, excerpt)
+            citations = _build_citations(retrieval, self.similarity_threshold)
             return QueryResult(
                 question=question,
                 answer=formatted_answer,
@@ -240,6 +277,7 @@ class RAGPipeline:
                     "page": best_meta.get("page", ""),
                     "similarity_score": retrieval.best_score,
                     "confidence": critic_result.confidence,
+                    "citations": citations,
                 },
             )
         else:

@@ -84,6 +84,8 @@ from question_generator import generate_session_quiz
 from answer_evaluator import grade_quiz
 from mastery_tracker import get_mastery_summary, get_session_readiness
 from path_adapter import adapt_path
+from review_scheduler import build_review_schedule
+from knowledge_transfer import compute_transfer
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -203,6 +205,10 @@ class SessionAskRequest(BaseModel):
 
 class QuizSubmitRequest(BaseModel):
     answers: list[str] = Field(..., description="Answers in question order")
+    self_confidence: float | None = Field(
+        None, ge=0, le=100,
+        description="Pre-quiz self-assessed confidence 0-100 (metacognitive calibration)",
+    )
 
 
 # ── Page routes ──────────────────────────────────────────────────────
@@ -541,6 +547,13 @@ async def session_ask(path_id: int, session_number: int,
                    "Call /api/session/{path_id}/{session_number}/start first."
         )
 
+    # Track doubt-query count as a cognitive-load signal
+    try:
+        from database import increment_doubt_count
+        increment_doubt_count(path_id, session_number)
+    except Exception:
+        pass
+
     return {
         "answer": result.answer,
         "source": result.source,
@@ -553,12 +566,35 @@ async def complete_session(path_id: int, session_number: int,
                            user=Depends(get_current_user)):
     """Mark a session as completed."""
     from datetime import datetime, timezone
-    update_session_progress(
-        path_id, session_number,
-        status="completed",
-        completed_at=datetime.now(timezone.utc).isoformat(),
-    )
-    return {"session_number": session_number, "status": "completed"}
+    from database import get_session_progress
+
+    now = datetime.now(timezone.utc)
+    duration_seconds = 0
+    progress = get_session_progress(path_id, session_number)
+    started_at = progress.get("started_at") if progress else None
+    if started_at:
+        try:
+            # stored via datetime.isoformat() or SQLite CURRENT_TIMESTAMP
+            if "T" in started_at:
+                start_dt = datetime.fromisoformat(started_at)
+            else:
+                start_dt = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            duration_seconds = max(0, int((now - start_dt).total_seconds()))
+        except Exception:
+            duration_seconds = 0
+
+    update_kwargs = {
+        "status": "completed",
+        "completed_at": now.isoformat(),
+    }
+    if duration_seconds > 0:
+        update_kwargs["study_duration_seconds"] = duration_seconds
+    update_session_progress(path_id, session_number, **update_kwargs)
+    return {
+        "session_number": session_number,
+        "status": "completed",
+        "study_duration_seconds": duration_seconds,
+    }
 
 
 @app.get("/api/session/{path_id}/{session_number}/materials")
@@ -619,7 +655,22 @@ async def generate_quiz(path_id: int, session_number: int,
     sid = session_id_for(str(path_id), session_number)
     critic = _get_critic()
 
-    quiz = generate_session_quiz(sid, target, critic)
+    # Compute average mastery for this session's skills so we can
+    # pick a Bloom-targeted ZPD difficulty window.
+    session_skills = set(target.get("skills", []))
+    current_mastery = None
+    if session_skills:
+        try:
+            from mastery_tracker import get_skill_mastery
+            records = get_skill_mastery(user["id"], path_id)
+            scores = [r.decayed_score for r in records
+                      if r.skill_label in session_skills]
+            if scores:
+                current_mastery = sum(scores) / len(scores)
+        except Exception:
+            current_mastery = None
+
+    quiz = generate_session_quiz(sid, target, critic, current_mastery=current_mastery)
 
     # Store for later submission
     quiz_key = f"{user['id']}_{path_id}_{session_number}"
@@ -634,6 +685,7 @@ async def generate_quiz(path_id: int, session_number: int,
             "options": q.options,
             "difficulty": q.difficulty,
             "source": q.source,
+            "bloom_level": q.bloom_level,
         }
         if q.reference_text:
             q_data["reference_text"] = q.reference_text
@@ -645,6 +697,12 @@ async def generate_quiz(path_id: int, session_number: int,
         "total_questions": len(questions),
         "mcq_count": quiz.total_mcq,
         "open_count": quiz.total_open,
+        "current_mastery": round(current_mastery, 1) if current_mastery is not None else None,
+        "bloom_distribution": {
+            lvl: sum(1 for q in quiz.questions if q.bloom_level == lvl)
+            for lvl in ["remember", "understand", "apply", "analyze", "evaluate", "create"]
+            if any(q.bloom_level == lvl for q in quiz.questions)
+        },
         "questions": questions,
     }
 
@@ -674,6 +732,7 @@ async def submit_quiz(path_id: int, session_number: int,
         critic=critic,
         user_id=user["id"],
         path_id=path_id,
+        self_confidence=req.self_confidence,
     )
 
     # Clean up active quiz
@@ -740,11 +799,205 @@ async def mastery_scores(path_id: int, user=Depends(get_current_user)):
                 "skill": s.skill_label,
                 "session_number": s.session_number,
                 "score": round(s.mastery_score, 1),
+                "decayed_score": round(s.decayed_score, 1),
+                "days_since_assessed": round(s.days_since_assessed, 1),
+                "needs_review": s.needs_review,
                 "attempts": s.attempts_count,
                 "status": s.status,
             }
             for s in summary.skills
         ],
+    }
+
+
+@app.get("/api/review-schedule/{path_id}")
+async def review_schedule(path_id: int, user=Depends(get_current_user)):
+    """Spaced-repetition review queue derived from the Ebbinghaus decay model."""
+    path_record = get_learning_path(path_id)
+    if not path_record:
+        raise HTTPException(status_code=404, detail="Learning path not found")
+    if path_record["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your learning path")
+
+    schedule = build_review_schedule(user["id"], path_id)
+    return {
+        "path_id": path_id,
+        "overdue_count": schedule.overdue_count,
+        "due_today_count": schedule.due_today_count,
+        "due_this_week_count": schedule.due_this_week_count,
+        "scheduled_count": schedule.scheduled_count,
+        "items": [
+            {
+                "skill": it.skill_label,
+                "session_number": it.session_number,
+                "mastery_score": it.mastery_score,
+                "decayed_score": it.decayed_score,
+                "last_assessed_at": it.last_assessed_at,
+                "days_since_assessed": it.days_since_assessed,
+                "interval_days": it.interval_days,
+                "next_review_at": it.next_review_at,
+                "days_until_review": it.days_until_review,
+                "urgency": it.urgency,
+            }
+            for it in schedule.items
+        ],
+    }
+
+
+@app.get("/api/transfer/{path_id}")
+async def knowledge_transfer_endpoint(path_id: int, user=Depends(get_current_user)):
+    """Cross-session knowledge-transfer metrics (Pearson r + per-prereq strength)."""
+    path_record = get_learning_path(path_id)
+    if not path_record:
+        raise HTTPException(status_code=404, detail="Learning path not found")
+    if path_record["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your learning path")
+
+    path_data = json.loads(
+        path_record.get("corrected_path") or path_record["original_path"]
+    )
+    report = compute_transfer(
+        user_id=user["id"],
+        path_id=path_id,
+        learning_path=path_data.get("learning_path", []),
+    )
+    return {
+        "path_id": path_id,
+        "sample_count": report.sample_count,
+        "correlation": report.correlation,
+        "weak_chains": report.weak_chains,
+        "strong_chains": report.strong_chains,
+        "pairs": [
+            {
+                "session_number": p.session_number,
+                "session_title": p.session_title,
+                "prerequisites": p.prerequisites,
+                "prereq_mastery_avg": round(p.prereq_mastery_avg, 1),
+                "session_score": round(p.session_score, 1),
+                "attempt_number": p.attempt_number,
+            }
+            for p in report.pairs
+        ],
+        "per_prerequisite": [
+            {
+                "prerequisite": t.prerequisite,
+                "dependent_sessions": t.dependent_sessions,
+                "sample_count": t.sample_count,
+                "prereq_mastery_avg": t.prereq_mastery_avg,
+                "dependent_score_avg": t.dependent_score_avg,
+                "transfer_score": t.transfer_score,
+            }
+            for t in report.per_prerequisite
+        ],
+    }
+
+
+@app.get("/api/calibration/{path_id}")
+async def calibration_endpoint(path_id: int, user=Depends(get_current_user)):
+    """Metacognitive calibration: compare self-assessed confidence vs. actual
+    quiz percentage. Returns a Dunning-Kruger-style calibration curve."""
+    path_record = get_learning_path(path_id)
+    if not path_record:
+        raise HTTPException(status_code=404, detail="Learning path not found")
+    if path_record["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your learning path")
+
+    from database import get_calibration_data
+    rows = get_calibration_data(user["id"], path_id)
+
+    gaps = [r["self_confidence"] - r["percentage"] for r in rows]
+    mean_gap = sum(gaps) / len(gaps) if gaps else 0.0
+    mean_abs_gap = sum(abs(g) for g in gaps) / len(gaps) if gaps else 0.0
+
+    # Pearson r between confidence and actual score
+    correlation = None
+    if len(rows) >= 3:
+        xs = [r["self_confidence"] for r in rows]
+        ys = [r["percentage"] for r in rows]
+        mx = sum(xs) / len(xs)
+        my = sum(ys) / len(ys)
+        num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        dx2 = sum((x - mx) ** 2 for x in xs)
+        dy2 = sum((y - my) ** 2 for y in ys)
+        if dx2 > 0 and dy2 > 0:
+            correlation = num / ((dx2 * dy2) ** 0.5)
+
+    if mean_gap > 10:
+        pattern = "overconfident"
+    elif mean_gap < -10:
+        pattern = "underconfident"
+    else:
+        pattern = "calibrated"
+
+    return {
+        "path_id": path_id,
+        "sample_count": len(rows),
+        "mean_gap": round(mean_gap, 2),
+        "mean_abs_gap": round(mean_abs_gap, 2),
+        "correlation": round(correlation, 3) if correlation is not None else None,
+        "pattern": pattern,
+        "points": [
+            {
+                "session_number": r["session_number"],
+                "attempt_number": r["attempt_number"],
+                "self_confidence": r["self_confidence"],
+                "actual_percentage": r["percentage"],
+                "gap": r["self_confidence"] - r["percentage"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/api/cognitive-load/{path_id}")
+async def cognitive_load_endpoint(path_id: int, user=Depends(get_current_user)):
+    """Per-session cognitive-load signals: doubt queries and study duration.
+    High doubt counts + long durations flag high-friction sessions."""
+    path_record = get_learning_path(path_id)
+    if not path_record:
+        raise HTTPException(status_code=404, detail="Learning path not found")
+    if path_record["user_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="Not your learning path")
+
+    from database import get_cognitive_load_data
+    rows = get_cognitive_load_data(path_id)
+
+    # Classify load: combine normalised doubt count + duration
+    max_doubts = max((r["doubt_query_count"] for r in rows), default=0) or 1
+    max_duration = max((r["study_duration_seconds"] for r in rows), default=0) or 1
+
+    sessions = []
+    for r in rows:
+        doubt_norm = r["doubt_query_count"] / max_doubts
+        duration_norm = r["study_duration_seconds"] / max_duration
+        load_score = round(100 * (0.5 * doubt_norm + 0.5 * duration_norm), 1)
+        if load_score >= 70:
+            load_level = "high"
+        elif load_score >= 40:
+            load_level = "moderate"
+        else:
+            load_level = "low"
+        sessions.append({
+            "session_number": r["session_number"],
+            "title": r["title"],
+            "status": r["status"],
+            "doubt_query_count": r["doubt_query_count"],
+            "study_duration_seconds": r["study_duration_seconds"],
+            "study_duration_minutes": round(r["study_duration_seconds"] / 60, 1),
+            "load_score": load_score,
+            "load_level": load_level,
+        })
+
+    total_doubts = sum(r["doubt_query_count"] for r in rows)
+    total_duration = sum(r["study_duration_seconds"] for r in rows)
+    return {
+        "path_id": path_id,
+        "total_doubt_queries": total_doubts,
+        "total_study_seconds": total_duration,
+        "total_study_minutes": round(total_duration / 60, 1),
+        "high_load_sessions": [s for s in sessions if s["load_level"] == "high"],
+        "sessions": sessions,
     }
 
 

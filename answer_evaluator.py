@@ -131,6 +131,7 @@ def grade_quiz(
     critic: BaseCritic,
     user_id: int,
     path_id: int,
+    self_confidence: float | None = None,
 ) -> QuizResult:
     """Grade all answers in a quiz and save results to the database.
 
@@ -169,6 +170,7 @@ def grade_quiz(
         session_number=quiz.session_number,
         user_id=user_id,
         attempt_number=attempt_number,
+        self_confidence=self_confidence,
     )
 
     # Grade each question

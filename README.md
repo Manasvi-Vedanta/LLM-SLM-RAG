@@ -19,10 +19,15 @@ A full-stack Retrieval-Augmented Generation system with two modes: (1) **RAG Q&A
 - **Skill mastery tracking** — weighted running average per skill (70% new / 30% old), classifies mastered (>85%) / review (50-85%) / weak (<50%)
 - **Adaptive path generation** — compresses mastered sessions, injects remediation for weak skills, suggests additional resources
 
-### Adaptive Learning Analytics
-- **ESCO skill prerequisite graph** — builds a directed acyclic graph (DAG) from session prerequisites, supports topological ordering, transitive prerequisite chains, dependent-skill lookup, and graph-constrained session reordering
+### Adaptive Learning Analytics (Research-Grade)
+- **ESCO skill prerequisite graph** — builds a directed acyclic graph (DAG) from session prerequisites, supports topological ordering, transitive prerequisite chains, dependent-skill lookup, and graph-constrained session reordering; path adapter uses it to heal prerequisite violations after remediation injection
+- **Ebbinghaus mastery decay** — per-skill mastery scores exponentially decay with time-since-last-assessment; the adapter uses *decayed* scores (not raw) so a stale 95% rightly triggers review
+- **Spaced repetition scheduler** — derives per-skill review intervals from the Ebbinghaus forgetting curve (`d = ln(S/T)/λ`), classifies items as overdue / due today / due this week / scheduled
 - **Knowledge-transfer metrics** — pairs prerequisite mastery with dependent-session performance, computes Pearson correlation, flags broken chains (high prereq mastery → weak downstream) and strong chains
-- **Spaced repetition scheduler** — derives per-skill review intervals from the Ebbinghaus forgetting curve, classifies items as overdue / due today / due this week / scheduled
+- **Bloom's Taxonomy + ZPD quiz targeting** — every generated question is labelled with its cognitive level (remember → create); the target level window is picked from current mastery so the quiz sits one rung above the learner's comfort zone (Vygotsky's Zone of Proximal Development)
+- **Metacognitive calibration** — students self-rate confidence before a quiz; the system compares predicted vs. actual to surface over-/under-confidence patterns (Dunning-Kruger signal) with Pearson correlation
+- **Cognitive-load signals** — tracks doubt-query count and study duration per session as proxies for intrinsic + extraneous load (Sweller); flags high-friction sessions
+- **Chunk-level citation provenance** — every document-grounded answer carries a citation array (source file, page, similarity score, 240-char preview) of every passing chunk — one click from answer to exact supporting excerpt
 
 ### Infrastructure
 - **LLM / SLM selection** — switch between Google Gemini 2.5 Flash (cloud LLM) and a fine-tuned Gemma 3 4B (local SLM via Ollama) with a single config change
@@ -105,9 +110,9 @@ A full-stack Retrieval-Augmented Generation system with two modes: (1) **RAG Q&A
 
 | Module | Role |
 |---|---|
-| `server.py` | FastAPI backend — 30 API routes: auth (3), original chat (2), path management (5), session (4 — includes materials endpoint), quiz (3), mastery/adaptation (2), health (1), pages (5) |
+| `server.py` | FastAPI backend — 34 API routes: auth (3), original chat (2), path management (5), session (4 — includes materials endpoint), quiz (3), mastery/adaptation (2), review-schedule (1), transfer (1), calibration (1), cognitive-load (1), health (1), pages (5) |
 | `auth.py` | JWT token creation/verification, bcrypt password hashing |
-| `database.py` | SQLite WAL mode — 7 tables: `users`, `chat_history`, `learning_paths`, `session_progress`, `quiz_attempts`, `quiz_answers`, `skill_mastery` (includes `last_assessed_at` for review scheduling) |
+| `database.py` | SQLite WAL mode — 7 tables: `users`, `chat_history`, `learning_paths`, `session_progress` (incl. `doubt_query_count` + `study_duration_seconds` for cognitive-load signals), `quiz_attempts` (incl. `self_confidence` for calibration), `quiz_answers`, `skill_mastery` (incl. `last_assessed_at` for review scheduling) |
 | `main.py` | Terminal CLI — original RAG Q&A loop + 6 learning pipeline commands |
 
 ### Frontend
@@ -181,7 +186,7 @@ Code/
 ├── Modelfile
 │
 │── # ── Backend & Auth ──
-├── server.py                     # FastAPI (30 routes)
+├── server.py                     # FastAPI (34 routes)
 ├── auth.py                       # JWT + bcrypt
 ├── database.py                   # SQLite (7 tables)
 ├── main.py                       # CLI entry point
@@ -396,7 +401,18 @@ Both backends share identical validation and fallback prompts. The `create_criti
 
 ## Adaptive Learning Analytics — Theory
 
-Beyond the core mastery tracker and path adapter, the project ships three auxiliary analytics modules. Each is a self-contained module in the repository root that can be called from CLI, notebooks, or higher-level routers.
+Beyond the core mastery tracker and path adapter, the project ships seven research-grade analytics modules grounded in classical cognitive-science and learning-analytics literature. Each is a self-contained module that can be called from CLI, notebooks, or HTTP endpoints.
+
+| # | Module | Grounded in |
+|---|---|---|
+| 1 | `skill_graph.py` | Graph theory — Kahn's topological sort, DAG validation; ESCO taxonomy |
+| 2 | `mastery_tracker.py` (decay) | Ebbinghaus forgetting curve (1885) |
+| 3 | `review_scheduler.py` | Spaced-repetition interval derivation (SM-2 family) |
+| 4 | `knowledge_transfer.py` | Pearson correlation; transfer-of-learning theory (Thorndike, Perkins & Salomon) |
+| 5 | `question_generator.py` (ZPD) | Bloom's Taxonomy (1956, revised 2001); Vygotsky's Zone of Proximal Development (1978) |
+| 6 | `database.get_calibration_data` + `/api/calibration` | Metacognition (Flavell, 1979); Dunning-Kruger effect (1999) |
+| 7 | `database.get_cognitive_load_data` + `/api/cognitive-load` | Cognitive Load Theory (Sweller, 1988) |
+| 8 | `pipeline._build_citations` | RAG faithfulness / provenance (Lewis et al. 2020, Gao et al. 2023) |
 
 ### 1. ESCO Skill Prerequisite Graph (`skill_graph.py`)
 
@@ -441,20 +457,30 @@ The `min` captures the idea that *a skill has only transferred as far as the wea
 - **Weak chain:** prereq mastery ≥ 70% AND dependent avg < 50% — the dependency is questionable
 - **Strong chain:** prereq mastery ≥ 70% AND dependent avg ≥ 70% — the pairing holds
 
-### 3. Spaced Repetition Scheduler (`review_scheduler.py`)
+### 3. Ebbinghaus Forgetting Curve — Mastery Decay (`mastery_tracker.py`)
 
-Based on Ebbinghaus's classical forgetting-curve model, retention after `d` days decays roughly exponentially:
+Hermann Ebbinghaus (1885) showed that recall after time `t` decays roughly exponentially. The modern formulation used here:
 
-$$R(d) = S \cdot e^{-\lambda d}$$
+$$R(d) = \max(F, S \cdot e^{-\lambda d})$$
 
-where `S` is the score at last assessment and `λ` is the decay rate. Setting `R(d) = T` (the mastery threshold, 85%) and solving for `d` gives the optimal review interval:
+where:
+- `S` = raw mastery score at last assessment (0–100),
+- `d` = days since assessment,
+- `λ` = `MASTERY_DECAY_LAMBDA = 0.02` (tuned so a threshold-level skill halves in ~35 days),
+- `F` = `MASTERY_DECAY_FLOOR = 20.0` — the stable "never-fully-forgotten" residual, consistent with findings that well-encoded material plateaus rather than decaying to zero.
+
+**Why use decayed scores, not raw?** The path adapter, scope checker, and review queue all consume `decayed_score`, not `mastery_score`. A 95% mastered three months ago should not block remediation — the decayed value surfaces the stale memory trace honestly. A `needs_review` flag fires whenever `raw ≥ THRESHOLD AND decayed < THRESHOLD`.
+
+### 4. Spaced Repetition Scheduler (`review_scheduler.py`)
+
+Setting `R(d) = T` (the mastery threshold, 85%) in the decay equation and solving for `d` gives the **optimal review interval** — the latest point at which the learner's retention will still be above threshold:
 
 $$d = \frac{\ln(S / T)}{\lambda}$$
 
-Implications of this simple formula:
+Implications:
 - A skill at exactly the threshold (`S = T`) has interval `d = 0` — review now.
-- A skill above threshold gets a longer interval in proportion to how far above it sits.
-- A skill far above threshold (e.g., 98%) compounds its interval quickly — well-learned material stays dormant longer, matching intuition from the SM-2 family.
+- A skill above threshold gets a longer interval in proportion to how far above it sits (the `ln` shape matches the intuition from the SM-2 family: every successful review roughly multiplies the interval).
+- A skill far above threshold (e.g., 98%) compounds quickly — well-learned material stays dormant longer.
 
 The scheduler emits a **review queue** with per-skill records:
 
@@ -465,7 +491,106 @@ The scheduler emits a **review queue** with per-skill records:
 | `days_until_review` | Signed offset — negative means overdue |
 | `urgency` | `overdue` / `due_today` / `due_this_week` / `scheduled` |
 
-Records are sorted by `days_until_review` ascending so the most overdue skills surface first.
+Records are sorted by `days_until_review` ascending so the most overdue skills surface first. Surfaced via `GET /api/review-schedule/{path_id}`.
+
+### 5. Bloom's Taxonomy + Zone of Proximal Development (`question_generator.py`)
+
+**Bloom's Taxonomy** (Bloom 1956, revised by Anderson & Krathwohl 2001) partitions cognitive learning objectives into six ascending levels:
+
+| Level | Verb family | Example |
+|---|---|---|
+| Remember | list, define, recall | *Name the three phases of the RAG pipeline.* |
+| Understand | explain, summarise, classify | *Why does the scope gate use cosine similarity and not Euclidean distance?* |
+| Apply | use, execute, implement | *Write a function that retrieves top-5 chunks from a FAISS index.* |
+| Analyze | compare, differentiate, attribute | *Compare the memory cost of full-FT versus QLoRA for a 4B model.* |
+| Evaluate | critique, justify, defend | *Is a 4-bit critic acceptable for a medical RAG system? Defend your answer.* |
+| Create | design, compose, construct | *Design a 3-session remediation plan for a student weak in Docker and SQL.* |
+
+**Vygotsky's ZPD** (Vygotsky 1978) is the band of tasks that a learner cannot yet solve alone but *can* solve with scaffolding. Tasks below ZPD bore; tasks above block. Optimal instruction targets **one step above current competence**.
+
+Combining the two, the generator maps mastery to a two-level Bloom window:
+
+| Current mastery | Target Bloom window | Rationale |
+|---|---|---|
+| < 40% | remember, understand | build foundation |
+| 40–70% | understand, apply | consolidate |
+| 70–85% | apply, analyze | extend |
+| ≥ 85% (beginner/intermediate session) | analyze, evaluate | push into higher-order reasoning |
+| ≥ 85% (advanced session) | evaluate, create | open-ended synthesis |
+
+The server computes the average *decayed* mastery for a session's skills and passes it to `generate_session_quiz(..., current_mastery=...)`. The prompt used by every `critic.generate_questions` implementation is augmented with a Bloom-hint block targeting that window, and every returned `QuizQuestion` carries a `bloom_level` label that the UI can surface as a cognitive badge.
+
+### 6. Knowledge-Transfer Metrics (`knowledge_transfer.py`)
+
+A core question in curriculum design: **does mastering a prerequisite actually translate into success on the downstream session?** This formalises *transfer of learning* (Thorndike 1901; Perkins & Salomon 1992).
+
+**Pearson correlation.** For each session with at least one quiz attempt, we pair `(avg_prereq_mastery, session_score)` and compute:
+
+$$r = \frac{\sum_i (x_i - \bar x)(y_i - \bar y)}{\sqrt{\sum_i (x_i - \bar x)^2} \sqrt{\sum_i (y_i - \bar y)^2}}$$
+
+`r ≈ 1` means the graph's prereq structure predicts outcomes well; `r ≈ 0` means mastery of prereqs says nothing about downstream performance. Only reported when n ≥ 3 pairs (otherwise statistically meaningless).
+
+**Per-prerequisite transfer strength.** For each prerequisite skill X:
+
+$$\text{transfer}(X) = \min(\text{mastery}(X), \text{avg dependent score})$$
+
+The `min` captures the idea that *a skill has only transferred as far as the weakest link in its downstream chain*. A skill with 95% mastery whose dependents average only 40% has a transfer score of 40% — a red flag.
+
+**Automatic flagging:**
+- **Weak chain:** prereq mastery ≥ 70% AND dependent avg < 50% — the dependency is questionable
+- **Strong chain:** prereq mastery ≥ 70% AND dependent avg ≥ 70% — the pairing holds
+
+### 7. Metacognitive Calibration — Dunning-Kruger Signal (`/api/calibration`)
+
+Flavell (1979) defined **metacognition** as "knowing what you know." Kruger & Dunning (1999) showed that unskilled individuals systematically overestimate competence, while experts often underestimate it. Well-calibrated self-assessment is a leading indicator of expert learning behaviour.
+
+Before submitting a quiz, the student provides a `self_confidence` rating (0–100). After grading, we compute the **confidence-performance gap**:
+
+$$\text{gap}_i = \text{confidence}_i - \text{actual}_i$$
+
+Aggregates exposed by `/api/calibration/{path_id}`:
+- **mean_gap** — systematic over/under-confidence (signed)
+- **mean_abs_gap** — overall calibration error
+- **correlation (Pearson r)** — do confidence and performance move together across attempts?
+- **pattern** — `overconfident` (mean_gap > 10), `underconfident` (< -10), or `calibrated`
+
+A learner with `r → 1` and `mean_abs_gap → 0` has accurate metacognition — they know which gaps they have. This signal feeds future work on adaptive remediation: overconfident students need a reality-check loop; underconfident ones need encouragement on questions they actually mastered.
+
+### 8. Cognitive Load Theory — Per-Session Friction (`/api/cognitive-load`)
+
+Sweller (1988) decomposed mental effort during learning into three components:
+
+| Type | Source | Example |
+|---|---|---|
+| **Intrinsic** | Inherent complexity of the material | Recursion is harder than `if` statements |
+| **Extraneous** | Unnecessary load from poor instructional design | Confusing UI, missing context, broken examples |
+| **Germane** | Productive load that builds schemas | Practice, worked examples |
+
+We approximate load from two observable signals per session:
+- **doubt_query_count** — number of `/session/.../ask` calls (high → learner confused, proxy for intrinsic + extraneous load)
+- **study_duration_seconds** — wall-clock time between `start` and `complete` (high → either deep engagement *or* struggle)
+
+Each signal is normalised against the per-path max and combined:
+
+$$\text{load\_score} = 100 \cdot (0.5 \cdot \widehat{\text{doubts}} + 0.5 \cdot \widehat{\text{duration}})$$
+
+A `load_level` of `high` (≥70), `moderate` (40–69), or `low` (<40) flags sessions that warrant instructional redesign — the content, not the student, may be the bottleneck.
+
+### 9. Chunk-Level Citation Provenance (`pipeline._build_citations`)
+
+A known failure mode of RAG systems is *faithfulness drift* — the LLM rephrases or hallucinates even when the retrieved excerpt is correct (Gao et al. 2023 on "RAG hallucinations"). The cure is **traceability**: every claim must resolve back to a specific chunk.
+
+For every document-grounded answer, `QueryResult.metadata.citations` now contains, for each chunk that passed the similarity gate:
+
+| Field | Use |
+|---|---|
+| `chunk_index` | Position in retrieval result (0 = best match) |
+| `similarity_score` | Cosine similarity to query |
+| `source_file` / `source_type` | File name and type (pdf, web, transcript, guide) |
+| `page` / `resource_name` / `url` | Stable locator — exact page or URL |
+| `preview` | First 240 characters of the chunk |
+
+This is the substrate for an inline-citation UI (planned) and for automated faithfulness audits: given an answer sentence, we can score it against its cited chunks with the critic's `evaluate_answer` to detect drift.
 
 ---
 
@@ -779,8 +904,12 @@ The critic model evolved across three training iterations. The v1 → v2 jump so
 | `POST` | `/api/quiz/{path_id}/{n}/generate` | Yes | Generate a quiz for a session |
 | `POST` | `/api/quiz/{path_id}/{n}/submit` | Yes | Submit quiz answers for grading |
 | `GET` | `/api/quiz/{path_id}/{n}/results` | Yes | Get quiz attempt history |
-| `GET` | `/api/mastery/{path_id}` | Yes | Get mastery summary for a path |
-| `POST` | `/api/path/{id}/adapt` | Yes | Generate an adapted learning path |
+| `GET` | `/api/mastery/{path_id}` | Yes | Get mastery summary for a path (with decayed scores + `needs_review` flags) |
+| `GET` | `/api/review-schedule/{path_id}` | Yes | Ebbinghaus-derived spaced-repetition queue (urgency per skill) |
+| `GET` | `/api/transfer/{path_id}` | Yes | Knowledge-transfer metrics (Pearson correlation + per-prereq strength) |
+| `GET` | `/api/calibration/{path_id}` | Yes | Metacognitive calibration — confidence vs. actual performance (Dunning-Kruger signal) |
+| `GET` | `/api/cognitive-load/{path_id}` | Yes | Per-session cognitive-load signals (doubt count + study duration) |
+| `POST` | `/api/path/{id}/adapt` | Yes | Generate an adapted learning path (uses decayed mastery + graph-constrained reorder) |
 
 ---
 
@@ -849,11 +978,11 @@ The critic model evolved across three training iterations. The v1 → v2 jump so
 - Raise similarity threshold to 0.40 to improve out-of-scope filtering
 - Scale training data to 1000+ examples with more diverse out-of-scope questions
 - Multi-round fine-tuning with DPO (Direct Preference Optimisation)
-- Chunk-level citation highlighting in the study chat UI
+- Frontend surfacing of the new analytics (Bloom badges on quiz cards, citation pills in study chat, calibration scatter-plot, cognitive-load heatmap, review-queue dashboard) — endpoints are live, UI is next
 - WebSocket streaming for real-time token-by-token responses
 - User file upload through the web UI
-- Wire `skill_graph`, `knowledge_transfer`, and `review_scheduler` into the learning page UI (currently available as standalone analytics modules)
-- Bloom's Taxonomy-aware quiz targeting (ZPD-adaptive question difficulty)
+- Automated faithfulness audit — run `critic.evaluate_answer` on every answer sentence against its cited chunks, surface drift as a confidence penalty
+- Adaptive remediation tied to calibration pattern (overconfident → reality-check loops; underconfident → positive reinforcement on solved gaps)
 - Collaborative learning paths (multi-user progress tracking)
 - Export mastery reports as PDF
 
@@ -882,10 +1011,29 @@ The CLI name `gemma3-critic-v3-new` matches `OLLAMA_MODEL_NAME` in `config.py`, 
 
 ## References
 
+### Retrieval-Augmented Generation & Distillation
+- Lewis, P., et al. (2020). *Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.* arXiv:2005.11401
+- Gao, Y., et al. (2023). *Retrieval-Augmented Generation for Large Language Models: A Survey.* arXiv:2312.10997
 - Hinton, G., Vinyals, O., & Dean, J. (2015). *Distilling the Knowledge in a Neural Network.* arXiv:1503.02531
+
+### Efficient Fine-Tuning
 - Hu, E. J., et al. (2021). *LoRA: Low-Rank Adaptation of Large Language Models.* arXiv:2106.09685
 - Dettmers, T., et al. (2023). *QLoRA: Efficient Finetuning of Quantized Language Models.* arXiv:2305.14314
-- Lewis, P., et al. (2020). *Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks.* arXiv:2005.11401
+
+### Cognitive Science of Learning
+- Ebbinghaus, H. (1885). *Über das Gedächtnis* (On Memory). Leipzig: Duncker & Humblot. — exponential forgetting curve
+- Bloom, B. S. (1956). *Taxonomy of Educational Objectives, Handbook I: Cognitive Domain.* Longmans.
+- Anderson, L. W., & Krathwohl, D. R. (Eds.) (2001). *A Taxonomy for Learning, Teaching, and Assessing: A Revision of Bloom's Taxonomy.* Longman.
+- Vygotsky, L. S. (1978). *Mind in Society: The Development of Higher Psychological Processes.* — Zone of Proximal Development
+- Sweller, J. (1988). *Cognitive Load During Problem Solving: Effects on Learning.* Cognitive Science, 12(2), 257–285.
+- Flavell, J. H. (1979). *Metacognition and Cognitive Monitoring: A New Area of Cognitive-Developmental Inquiry.* American Psychologist, 34(10), 906–911.
+- Kruger, J., & Dunning, D. (1999). *Unskilled and Unaware of It: How Difficulties in Recognizing One's Own Incompetence Lead to Inflated Self-Assessments.* Journal of Personality and Social Psychology, 77(6), 1121–1134.
+- Thorndike, E. L. (1901). *The Influence of Improvement in One Mental Function upon the Efficiency of Other Functions.* Psychological Review, 8(3), 247–261. — transfer of learning
+- Perkins, D. N., & Salomon, G. (1992). *Transfer of Learning.* International Encyclopedia of Education.
+
+### Standards & Formal Methods
+- European Commission. *ESCO — European Skills, Competences, Qualifications and Occupations.* ec.europa.eu/esco — skill taxonomy used in session skill-details mapping
+- Kahn, A. B. (1962). *Topological Sorting of Large Networks.* Communications of the ACM, 5(11), 558–562.
 
 ---
 

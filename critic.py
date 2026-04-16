@@ -97,9 +97,28 @@ class BaseCritic(ABC):
 
     @abstractmethod
     def generate_questions(self, excerpt: str, skill_label: str,
-                           difficulty: str, n: int) -> list[dict]:
-        """Generate quiz questions from an excerpt."""
+                           difficulty: str, n: int,
+                           bloom_levels: list[str] | None = None) -> list[dict]:
+        """Generate quiz questions from an excerpt.
+
+        ``bloom_levels`` — optional ZPD-targeted cognitive levels
+        (e.g. ["understand", "apply"]) that the generator should bias toward.
+        """
         ...
+
+
+def _build_bloom_hint(bloom_levels: list[str] | None) -> str:
+    """Format an optional Bloom's-taxonomy targeting hint for the prompt."""
+    if not bloom_levels:
+        return ""
+    levels = ", ".join(bloom_levels)
+    return (
+        "### TARGET COGNITIVE LEVELS (Bloom's Taxonomy)\n"
+        f"Bias the questions toward these levels: {levels}.\n"
+        "Pick verbs that match (remember: list/define; understand: explain/summarize; "
+        "apply: use/execute; analyze: compare/differentiate; "
+        "evaluate: critique/justify; create: design/compose).\n\n"
+    )
 
     @abstractmethod
     def evaluate_answer(self, question: str, user_answer: str,
@@ -304,7 +323,7 @@ Create a mix of question types:
 - MCQ (multiple choice with 4 options, one correct)
 - OPEN (open-ended, short answer)
 
-### EXCERPT
+{bloom_hint}### EXCERPT
 {excerpt}
 
 ### OUTPUT FORMAT
@@ -315,6 +334,7 @@ Return a JSON array of question objects. Each object must have:
   "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}} (only for mcq, null for open),
   "correct_answer": "<letter for mcq, or short answer text for open>",
   "difficulty": "{difficulty}",
+  "bloom_level": "<one of: remember, understand, apply, analyze, evaluate, create>",
   "explanation": "<why this is the correct answer>",
   "reference_text": "<the specific part of the excerpt the question is about — include any code, formula, or passage the student needs to see to answer>"
 }}
@@ -330,10 +350,12 @@ Rules:
 """
 
     def generate_questions(self, excerpt: str, skill_label: str,
-                           difficulty: str = "medium", n: int = 3) -> list[dict]:
+                           difficulty: str = "medium", n: int = 3,
+                           bloom_levels: list[str] | None = None) -> list[dict]:
         prompt = self._GENERATE_QUESTIONS_PROMPT.format(
             excerpt=excerpt, skill_label=skill_label,
             difficulty=difficulty, n=n,
+            bloom_hint=_build_bloom_hint(bloom_levels),
         )
         raw = self._call_with_retry(prompt)
         try:
@@ -523,10 +545,12 @@ ANSWER:
 
     # ── question generation (uses base model) ────────────────────────
     def generate_questions(self, excerpt: str, skill_label: str,
-                           difficulty: str = "medium", n: int = 3) -> list[dict]:
+                           difficulty: str = "medium", n: int = 3,
+                           bloom_levels: list[str] | None = None) -> list[dict]:
         prompt = GeminiCritic._GENERATE_QUESTIONS_PROMPT.format(
             excerpt=excerpt, skill_label=skill_label,
             difficulty=difficulty, n=n,
+            bloom_hint=_build_bloom_hint(bloom_levels),
         )
         raw = self._call_ollama(prompt, model=config.OLLAMA_BASE_MODEL)
         try:
@@ -582,7 +606,9 @@ class MockCritic(BaseCritic):
         return f"**Definition:**\n{excerpt[:300]}"
 
     def generate_questions(self, excerpt: str, skill_label: str,
-                           difficulty: str = "medium", n: int = 3) -> list[dict]:
+                           difficulty: str = "medium", n: int = 3,
+                           bloom_levels: list[str] | None = None) -> list[dict]:
+        levels = bloom_levels or ["understand", "apply"]
         questions = []
         for i in range(n):
             q_type = "mcq" if i < n // 2 + 1 else "open"
@@ -592,6 +618,7 @@ class MockCritic(BaseCritic):
                 "options": {"A": "Option A", "B": "Option B", "C": "Option C", "D": "Option D"} if q_type == "mcq" else None,
                 "correct_answer": "A" if q_type == "mcq" else f"Sample answer about {skill_label}",
                 "difficulty": difficulty,
+                "bloom_level": levels[i % len(levels)],
                 "explanation": "[MockCritic] This is a placeholder question.",
             }
             questions.append(q)

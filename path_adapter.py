@@ -19,6 +19,7 @@ from pathlib import Path
 import config
 import llm_service
 from mastery_tracker import get_skill_mastery, SkillMastery
+from skill_graph import build_skill_graph, get_esco_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -115,15 +116,28 @@ def adapt_path(
     mastery_records = get_skill_mastery(user_id, path_id)
     mastery_map = {r.skill_label: r for r in mastery_records}
 
+    # Build prerequisite DAG and validate the original ordering
+    graph = build_skill_graph(sessions)
+    ordering_violations = graph.validate_ordering(sessions)
+    esco_map = get_esco_mapping(sessions)
+
     adapted_sessions = []
     log_lines = [
         f"Path Adaptation Report",
         f"Career Goal: {career_goal}",
         f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"Skills assessed: {len(mastery_records)}",
+        f"Skill graph: {len(graph.nodes)} nodes, "
+        f"{sum(len(v) for v in graph.edges.values())} edges",
+        f"Ordering violations in original path: {len(ordering_violations)}",
         "=" * 60,
         "",
     ]
+    if ordering_violations:
+        log_lines.append("Prerequisite violations detected:")
+        for v in ordering_violations[:10]:
+            log_lines.append(f"  - {v}")
+        log_lines.append("")
 
     remediation_queue = []  # (insert_before_session_number, remediation_session)
 
@@ -135,12 +149,12 @@ def adapt_path(
 
         log_lines.append(f"Session {sn}: {title}")
 
-        # Check mastery for all skills in this session
+        # Check mastery for all skills in this session (using decayed scores)
         skill_scores = []
         for skill in skills:
             mastery = mastery_map.get(skill)
             if mastery:
-                skill_scores.append((skill, mastery.mastery_score, mastery.status))
+                skill_scores.append((skill, mastery.decayed_score, mastery.status))
             else:
                 skill_scores.append((skill, -1, "not_assessed"))
 
@@ -228,6 +242,21 @@ def adapt_path(
                 adapted_sessions.insert(i, remediation)
                 break
 
+    # Graph-constrained reorder: fix any prerequisite violations introduced
+    # by remediation injection or present in the original path.
+    reorder_graph = build_skill_graph(adapted_sessions)
+    pre_violation_count = len(reorder_graph.validate_ordering(adapted_sessions))
+    if pre_violation_count > 0:
+        adapted_sessions = reorder_graph.constrained_reorder(adapted_sessions)
+        post_violation_count = len(
+            build_skill_graph(adapted_sessions).validate_ordering(adapted_sessions)
+        )
+        log_lines.append(
+            f"Graph-constrained reorder: {pre_violation_count} -> "
+            f"{post_violation_count} prerequisite violations"
+        )
+        log_lines.append("")
+
     # Renumber all sessions
     for i, session in enumerate(adapted_sessions, 1):
         session["session_number"] = i
@@ -235,11 +264,19 @@ def adapt_path(
     # Build adapted path
     adapted_path = dict(corrected_path)
     adapted_path["learning_path"] = adapted_sessions
+    needs_review = [
+        m.skill_label for m in mastery_records if m.needs_review
+    ]
     adapted_path["adaptation_metadata"] = {
         "adapted_at": datetime.now().isoformat(),
         "original_session_count": len(sessions),
         "adapted_session_count": len(adapted_sessions),
         "mastery_records_used": len(mastery_records),
+        "skill_graph_nodes": len(graph.nodes),
+        "skill_graph_edges": sum(len(v) for v in graph.edges.values()),
+        "original_ordering_violations": len(ordering_violations),
+        "skills_needing_spaced_review": needs_review,
+        "esco_uri_map": esco_map,
     }
 
     # Summary

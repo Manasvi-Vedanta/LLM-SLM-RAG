@@ -104,6 +104,16 @@ MASTERY_THRESHOLD_SKIP = 85               # score above which a skill is "master
 MASTERY_THRESHOLD_REVIEW = 50             # score below which remediation is needed
 
 # ──────────────────────────────────────────────
+# Ebbinghaus Forgetting Curve (time-decay on mastery)
+# ──────────────────────────────────────────────
+# decayed = max(FLOOR, raw_score * exp(-LAMBDA * days_since_assessed))
+# LAMBDA = 0.02 gives ~half-decay every ~35 days for a skill at threshold.
+# Tune LAMBDA up to forget faster, down to forget slower.
+MASTERY_DECAY_LAMBDA = 0.02
+MASTERY_DECAY_FLOOR = 20.0                # decayed score never drops below this
+SPACED_REVIEW_THRESHOLD_DAYS = 7          # "due this week" cut-off for review scheduler
+
+# ──────────────────────────────────────────────
 # Logging
 # ──────────────────────────────────────────────
 LOG_LEVEL = "INFO"
