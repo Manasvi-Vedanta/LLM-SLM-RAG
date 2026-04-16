@@ -16,8 +16,8 @@ A full-stack Retrieval-Augmented Generation system with two modes: (1) **RAG Q&A
 - **Per-session content ingestion** — resolves resource names to URLs via multi-backend web search (DDGS, Brave, DuckDuckGo HTML), scrapes content with trafilatura, auto-detects video URLs and routes them to transcript extraction, builds per-session FAISS indexes
 - **Study mode with doubt clarification** — session-scoped RAG Q&A against ingested materials
 - **Document-grounded quizzes** — generates MCQ + open-ended questions from session materials, grades answers against source excerpts
-- **Skill mastery tracking** — weighted running average per skill (70% new / 30% old), classifies mastered (>85%) / review (50-85%) / weak (<50%)
-- **Adaptive path generation** — compresses mastered sessions, injects remediation for weak skills, suggests additional resources
+- **Skill mastery tracking (two-stage)** — on quiz submit, the stored `mastery_score` is updated as a weighted running average (70% new / 30% old) against the prior raw score. On every read, the stored score is passed through an **Ebbinghaus exponential time-decay** to produce a `decayed_score`; all downstream consumers (path adapter, prerequisite readiness check, review scheduler) use the decayed score so stale mastery is surfaced automatically. Classification on the decayed score: mastered (>85%) / review (50–85%) / weak (<50%), plus a `needs_review` flag when `raw ≥ 85 AND decayed < 85`.
+- **Adaptive path generation** — uses decayed mastery to compress mastered sessions, inject remediation for weak skills, and suggest additional resources; then runs a graph-constrained topological reorder to heal any prerequisite violations introduced by remediation injection
 
 ### Adaptive Learning Analytics (Research-Grade)
 - **ESCO skill prerequisite graph** — builds a directed acyclic graph (DAG) from session prerequisites, supports topological ordering, transitive prerequisite chains, dependent-skill lookup, and graph-constrained session reordering; path adapter uses it to heal prerequisite violations after remediation injection
@@ -90,7 +90,7 @@ A full-stack Retrieval-Augmented Generation system with two modes: (1) **RAG Q&A
 | `session_orchestrator.py` | Single entry point: `ingest_session()` → maps content → builds per-session FAISS index. Caches materials metadata (sources, provenance) for the materials API |
 | `question_generator.py` | Generates document-grounded MCQ + open-ended questions; Critic validates each candidate; supplements with general-knowledge questions (labelled) if content is thin |
 | `answer_evaluator.py` | MCQ: direct grading. Open-ended: Critic scores against source excerpts. Saves results to database |
-| `mastery_tracker.py` | Weighted running average (70% new, 30% old). Classifies: mastered (>85%), review (50-85%), weak (<50%) |
+| `mastery_tracker.py` | **Write-side:** weighted running average (70% new, 30% old) on quiz submit. **Read-side:** Ebbinghaus exponential time-decay `decayed = max(FLOOR, raw·e^(-λ·days))` applied on every read. Classifies mastered (>85%) / review (50–85%) / weak (<50%) against the decayed score; flags `needs_review` when raw ≥ 85 but decayed drops below |
 | `path_adapter.py` | Mastered sessions compressed, weak sessions get remediation injected, resources auto-suggested. Outputs adapted JSON |
 | `skill_graph.py` | Directed skill prerequisite DAG — topological sort, prerequisite chains, ESCO URI mapping, graph-constrained reorder |
 | `knowledge_transfer.py` | Pearson correlation between prerequisite mastery and dependent-session performance; flags weak/strong transfer chains |
@@ -377,7 +377,7 @@ The learning pipeline follows a strict 6-step progression:
 3. **Content Ingestion** (lazy, per-session) — Resolves resource names to URLs via multi-backend search (DDGS → Brave → DDG HTML), scrapes web content with trafilatura, auto-detects video URLs and routes them to transcript extraction (or flags them as direct links if yt-dlp/whisper unavailable). Priority: user PDFs > scraped web > JSON guides > video transcripts. Builds a per-session FAISS index in `session_vectorstores/`
 4. **Study Mode** — Session-scoped RAG Q&A using the per-session vector store. Same Actor→Critic flow as the original pipeline
 5. **Quiz Generation & Grading** — Generates document-grounded MCQ + open-ended questions (each validated by the Critic). MCQ graded directly; open-ended scored against source excerpts. Every question tagged with its source (`your_materials` or `general_knowledge`)
-6. **Mastery & Adaptation** — Per-skill mastery tracked with weighted running average (70% new, 30% old). Path adaptation: mastered sessions (>85%) compressed, weak sessions (<50%) get remediation injected with LLM-generated content, review sessions (50-85%) get additional resources
+6. **Mastery & Adaptation** — Per-skill raw mastery is updated via a weighted running average (70% new, 30% old) on every quiz submit, then passed through an Ebbinghaus exponential time-decay on read. Path adaptation consumes the **decayed** score: mastered sessions (>85%) compressed, weak sessions (<50%) get LLM-generated remediation injected, review sessions (50–85%) get additional resources. A graph-constrained reorder heals any prerequisite violations introduced by injection
 
 ---
 
