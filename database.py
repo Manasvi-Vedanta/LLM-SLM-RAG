@@ -1,8 +1,10 @@
 """
-database.py – SQLite user store for the RAG Web UI
-----------------------------------------------------
+database.py – SQLite persistence for the RAG Learning Assistant
+----------------------------------------------------------------
 Lightweight persistence using built-in sqlite3.
 Creates the DB file on first import if it doesn't exist.
+Covers: users, chat history, learning paths, session progress,
+quiz attempts/answers, and skill mastery tracking.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ def get_db():
 
 
 def init_db() -> None:
-    """Create users table if it doesn't exist."""
+    """Create all tables if they don't exist."""
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -54,6 +56,79 @@ def init_db() -> None:
                 metadata    TEXT    DEFAULT '{}',
                 created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        # ── Learning Path Pipeline Tables ──
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS learning_paths (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         INTEGER NOT NULL,
+                filename        TEXT    NOT NULL,
+                career_goal     TEXT    NOT NULL,
+                original_path   TEXT    NOT NULL,
+                corrected_path  TEXT,
+                status          TEXT    NOT NULL DEFAULT 'loaded',
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS session_progress (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                path_id           INTEGER NOT NULL,
+                session_number    INTEGER NOT NULL,
+                title             TEXT    NOT NULL,
+                status            TEXT    NOT NULL DEFAULT 'not_started',
+                vectorstore_built INTEGER NOT NULL DEFAULT 0,
+                started_at        TIMESTAMP,
+                completed_at      TIMESTAMP,
+                FOREIGN KEY (path_id) REFERENCES learning_paths(id),
+                UNIQUE(path_id, session_number)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS quiz_attempts (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                path_id         INTEGER NOT NULL,
+                session_number  INTEGER NOT NULL,
+                user_id         INTEGER NOT NULL,
+                attempt_number  INTEGER NOT NULL,
+                total_score     REAL    NOT NULL DEFAULT 0,
+                max_score       REAL    NOT NULL DEFAULT 0,
+                percentage      REAL    NOT NULL DEFAULT 0,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (path_id) REFERENCES learning_paths(id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS quiz_answers (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                attempt_id      INTEGER NOT NULL,
+                question_text   TEXT    NOT NULL,
+                question_type   TEXT    NOT NULL,
+                question_source TEXT    NOT NULL DEFAULT 'your_materials',
+                user_answer     TEXT,
+                correct_answer  TEXT,
+                score           REAL    NOT NULL DEFAULT 0,
+                max_score       REAL    NOT NULL DEFAULT 100,
+                feedback        TEXT,
+                FOREIGN KEY (attempt_id) REFERENCES quiz_attempts(id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS skill_mastery (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         INTEGER NOT NULL,
+                path_id         INTEGER NOT NULL,
+                skill_label     TEXT    NOT NULL,
+                session_number  INTEGER NOT NULL,
+                mastery_score   REAL    NOT NULL DEFAULT 0,
+                attempts_count  INTEGER NOT NULL DEFAULT 0,
+                last_assessed_at TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (path_id) REFERENCES learning_paths(id),
+                UNIQUE(user_id, path_id, skill_label)
             )
         """)
 
@@ -106,6 +181,215 @@ def get_chat_history(user_id: int, limit: int = 50) -> list[dict]:
             "SELECT question, answer, source, metadata, created_at FROM chat_history "
             "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
             (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ──────────────────────────────────────────────
+# Learning Paths
+# ──────────────────────────────────────────────
+
+def create_learning_path(user_id: int, filename: str, career_goal: str,
+                         original_path: str) -> int:
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO learning_paths (user_id, filename, career_goal, original_path) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, filename, career_goal, original_path),
+        )
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+def get_learning_path(path_id: int) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM learning_paths WHERE id = ?", (path_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_learning_paths(user_id: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM learning_paths WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_learning_path(path_id: int, **kwargs) -> None:
+    allowed = {"corrected_path", "status"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [path_id]
+    with get_db() as conn:
+        conn.execute(
+            f"UPDATE learning_paths SET {set_clause} WHERE id = ?", values
+        )
+
+
+# ──────────────────────────────────────────────
+# Session Progress
+# ──────────────────────────────────────────────
+
+def create_session_progress(path_id: int, session_number: int, title: str) -> int:
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO session_progress (path_id, session_number, title) "
+            "VALUES (?, ?, ?)",
+            (path_id, session_number, title),
+        )
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+def get_session_progress(path_id: int, session_number: int) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM session_progress WHERE path_id = ? AND session_number = ?",
+            (path_id, session_number),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_all_session_progress(path_id: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM session_progress WHERE path_id = ? ORDER BY session_number",
+            (path_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_session_progress(path_id: int, session_number: int, **kwargs) -> None:
+    allowed = {"status", "vectorstore_built", "started_at", "completed_at"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [path_id, session_number]
+    with get_db() as conn:
+        conn.execute(
+            f"UPDATE session_progress SET {set_clause} "
+            "WHERE path_id = ? AND session_number = ?",
+            values,
+        )
+
+
+# ──────────────────────────────────────────────
+# Quiz Attempts & Answers
+# ──────────────────────────────────────────────
+
+def create_quiz_attempt(path_id: int, session_number: int, user_id: int,
+                        attempt_number: int) -> int:
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO quiz_attempts "
+            "(path_id, session_number, user_id, attempt_number) "
+            "VALUES (?, ?, ?, ?)",
+            (path_id, session_number, user_id, attempt_number),
+        )
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+def update_quiz_attempt(attempt_id: int, total_score: float,
+                        max_score: float, percentage: float) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE quiz_attempts SET total_score = ?, max_score = ?, percentage = ? "
+            "WHERE id = ?",
+            (total_score, max_score, percentage, attempt_id),
+        )
+
+
+def get_quiz_attempts(path_id: int, session_number: int,
+                      user_id: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM quiz_attempts "
+            "WHERE path_id = ? AND session_number = ? AND user_id = ? "
+            "ORDER BY attempt_number DESC",
+            (path_id, session_number, user_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_quiz_answer(attempt_id: int, question_text: str, question_type: str,
+                     question_source: str, user_answer: str | None,
+                     correct_answer: str | None, score: float,
+                     max_score: float, feedback: str | None) -> int:
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO quiz_answers "
+            "(attempt_id, question_text, question_type, question_source, "
+            "user_answer, correct_answer, score, max_score, feedback) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (attempt_id, question_text, question_type, question_source,
+             user_answer, correct_answer, score, max_score, feedback),
+        )
+        return cursor.lastrowid  # type: ignore[return-value]
+
+
+def get_quiz_answers(attempt_id: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM quiz_answers WHERE attempt_id = ? ORDER BY id",
+            (attempt_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ──────────────────────────────────────────────
+# Skill Mastery
+# ──────────────────────────────────────────────
+
+def upsert_skill_mastery(user_id: int, path_id: int, skill_label: str,
+                         session_number: int, new_score: float) -> None:
+    """Update mastery with weighted running average (70% new, 30% old)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT mastery_score, attempts_count FROM skill_mastery "
+            "WHERE user_id = ? AND path_id = ? AND skill_label = ?",
+            (user_id, path_id, skill_label),
+        ).fetchone()
+        if row:
+            old_score = row["mastery_score"]
+            count = row["attempts_count"]
+            updated_score = 0.7 * new_score + 0.3 * old_score
+            conn.execute(
+                "UPDATE skill_mastery SET mastery_score = ?, attempts_count = ?, "
+                "last_assessed_at = CURRENT_TIMESTAMP "
+                "WHERE user_id = ? AND path_id = ? AND skill_label = ?",
+                (updated_score, count + 1, user_id, path_id, skill_label),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO skill_mastery "
+                "(user_id, path_id, skill_label, session_number, "
+                "mastery_score, attempts_count, last_assessed_at) "
+                "VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)",
+                (user_id, path_id, skill_label, session_number, new_score),
+            )
+
+
+def get_skill_mastery(user_id: int, path_id: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM skill_mastery "
+            "WHERE user_id = ? AND path_id = ? ORDER BY session_number, skill_label",
+            (user_id, path_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_skill_mastery_by_session(user_id: int, path_id: int,
+                                 session_number: int) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM skill_mastery "
+            "WHERE user_id = ? AND path_id = ? AND session_number = ?",
+            (user_id, path_id, session_number),
         ).fetchall()
         return [dict(r) for r in rows]
 

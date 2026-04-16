@@ -19,6 +19,12 @@ BASE_DIR = Path(__file__).resolve().parent
 DATASET_DIR = BASE_DIR / "Dataset"
 VECTORSTORE_DIR = BASE_DIR / "vectorstore"          # persisted FAISS index
 
+# ── Learning Path Pipeline Paths ──
+LEARNING_PATH_DIR = BASE_DIR / "Learning Path Inputs"
+CORRECTED_PATH_DIR = BASE_DIR / "Corrected Paths"
+SESSION_VECTORSTORE_DIR = BASE_DIR / "session_vectorstores"
+SESSION_CONTENT_DIR = BASE_DIR / "Session Content"  # user-provided PDFs per session
+
 # ──────────────────────────────────────────────
 # PDF Ingestion / Chunking
 # ──────────────────────────────────────────────
@@ -70,8 +76,32 @@ GEMINI_FALLBACK_MODELS = [
 # ── Ollama / Gemma (local SLM) ──
 # Use "gemma3:4b"       for the base (non-fine-tuned) model
 # Use "gemma3-critic"   for the fine-tuned model (after running finetune.py)
-OLLAMA_MODEL_NAME = "gemma3-critic-v3-new"
+OLLAMA_MODEL_NAME = "gemma3-critic-v3-new"            # fine-tuned: validation only
+OLLAMA_BASE_MODEL = "gemma3:4b"                        # base model: all generation tasks
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# ──────────────────────────────────────────────
+# Transcript Extraction (optional)
+# ──────────────────────────────────────────────
+WHISPER_MODEL_SIZE = "base"               # "tiny", "base", "small", "medium", "large"
+
+# ──────────────────────────────────────────────
+# Web Resource Resolver
+# ──────────────────────────────────────────────
+WEB_SCRAPE_TIMEOUT = 15                   # seconds per page
+MAX_RESOURCES_PER_SESSION = 5             # cap on web searches per session
+
+# ──────────────────────────────────────────────
+# Quiz Generation
+# ──────────────────────────────────────────────
+QUIZ_MCQ_COUNT = 5                        # MCQ questions per quiz
+QUIZ_OPEN_COUNT = 3                       # open-ended questions per quiz
+
+# ──────────────────────────────────────────────
+# Mastery Thresholds
+# ──────────────────────────────────────────────
+MASTERY_THRESHOLD_SKIP = 85               # score above which a skill is "mastered"
+MASTERY_THRESHOLD_REVIEW = 50             # score below which remediation is needed
 
 # ──────────────────────────────────────────────
 # Logging

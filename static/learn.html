@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Learn – RAG Learning Assistant</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/learn.css">
+</head>
+<body>
+
+    <div id="three-canvas"></div>
+
+    <!-- Top bar -->
+    <div class="learn-topbar">
+        <div class="learn-topbar-left">
+            <a href="/" class="navbar-brand">
+                <span class="brand-icon">⚡</span>
+                RAG System
+            </a>
+            <span class="topbar-sep">|</span>
+            <span class="topbar-label" id="topbar-goal">Learning Assistant</span>
+        </div>
+        <div class="learn-topbar-right">
+            <a href="/chat" class="btn btn-ghost btn-sm">PDF Chat</a>
+            <span id="username-display" style="font-size:0.85rem; color:var(--text-secondary);"></span>
+            <div class="user-avatar" id="user-avatar"></div>
+            <button class="btn btn-ghost btn-sm" id="logout-btn">Log Out</button>
+        </div>
+    </div>
+
+    <!-- Main layout -->
+    <div class="learn-layout">
+
+        <!-- Sidebar -->
+        <aside class="learn-sidebar glass-card" id="sidebar">
+            <div class="sidebar-section">
+                <h4>Learning Path</h4>
+                <select class="form-input" id="path-select" style="font-size:0.85rem;">
+                    <option value="">Select a path...</option>
+                </select>
+                <button class="btn btn-primary btn-sm" id="load-btn" style="margin-top:0.5rem; width:100%;">Load Path</button>
+            </div>
+
+            <div class="sidebar-section" id="sessions-panel" style="display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <h4>Sessions</h4>
+                    <button class="btn btn-ghost btn-sm" id="mastery-btn" title="View mastery">Mastery</button>
+                </div>
+                <div id="session-list" class="session-list"></div>
+                <button class="btn btn-secondary btn-sm" id="adapt-btn" style="margin-top:0.75rem; width:100%;">Adapt Path</button>
+            </div>
+        </aside>
+
+        <!-- Main content area -->
+        <main class="learn-main" id="main-content">
+
+            <!-- Welcome state -->
+            <div class="learn-panel" id="panel-welcome">
+                <div class="panel-center">
+                    <h2>Learning Assistant</h2>
+                    <p>Select a learning path from the sidebar to get started. The system will validate the path, ingest content per session, and guide you through study, quizzes, and mastery tracking.</p>
+                </div>
+            </div>
+
+            <!-- Validation panel -->
+            <div class="learn-panel" id="panel-validate" style="display:none;">
+                <div class="panel-header">
+                    <h3>Path Validation</h3>
+                    <span class="badge badge-accent" id="validate-status">Validating...</span>
+                </div>
+                <pre class="log-output" id="validate-log"></pre>
+            </div>
+
+            <!-- Study panel -->
+            <div class="learn-panel" id="panel-study" style="display:none;">
+                <div class="panel-header">
+                    <h3 id="study-title">Study Mode</h3>
+                    <div>
+                        <button class="btn btn-ghost btn-sm" id="study-materials-btn">Materials</button>
+                        <button class="btn btn-secondary btn-sm" id="study-quiz-btn">Take Quiz</button>
+                        <button class="btn btn-ghost btn-sm" id="study-done-btn">Mark Done</button>
+                    </div>
+                </div>
+                <div class="study-chat" id="study-messages"></div>
+                <div class="study-input-area">
+                    <input type="text" class="form-input" id="study-input"
+                           placeholder="Ask a question about this session's material..."
+                           autocomplete="off" maxlength="2000">
+                    <button class="btn btn-primary btn-sm" id="study-send">Send</button>
+                </div>
+            </div>
+
+            <!-- Quiz panel -->
+            <div class="learn-panel" id="panel-quiz" style="display:none;">
+                <div class="panel-header">
+                    <h3 id="quiz-title">Quiz</h3>
+                    <span class="badge badge-accent" id="quiz-progress">0/0</span>
+                </div>
+                <div id="quiz-content"></div>
+                <div id="quiz-results" style="display:none;"></div>
+            </div>
+
+            <!-- Mastery panel -->
+            <div class="learn-panel" id="panel-mastery" style="display:none;">
+                <div class="panel-header">
+                    <h3>Mastery Dashboard</h3>
+                </div>
+                <div id="mastery-content"></div>
+            </div>
+
+            <!-- Adapt panel -->
+            <div class="learn-panel" id="panel-adapt" style="display:none;">
+                <div class="panel-header">
+                    <h3>Adapted Path</h3>
+                </div>
+                <pre class="log-output" id="adapt-log"></pre>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Materials modal -->
+    <div class="modal-overlay" id="materials-modal" style="display:none;">
+        <div class="modal-card glass-card">
+            <div class="modal-header">
+                <h3>Session Materials</h3>
+                <button class="btn btn-ghost btn-sm" id="materials-close">&times;</button>
+            </div>
+            <div class="modal-body" id="materials-content">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initBackground } from '/static/js/background.js';
+        import { requireAuth, getUser, logout, authFetch } from '/static/js/auth.js';
+
+        initBackground();
+        if (!requireAuth()) throw new Error('redirect');
+
+        const user = getUser();
+        document.getElementById('username-display').textContent = user?.username || '';
+        document.getElementById('user-avatar').textContent = (user?.username || '?')[0].toUpperCase();
+        document.getElementById('logout-btn').addEventListener('click', () => logout());
+
+        // ── State ───────────────────────────────────────────────────
+        let activePathId = null;
+        let activeSessionNumber = null;
+        let quizData = null;
+
+        // ── Helpers ─────────────────────────────────────────────────
+        function showPanel(id) {
+            document.querySelectorAll('.learn-panel').forEach(p => p.style.display = 'none');
+            document.getElementById(id).style.display = '';
+        }
+
+        function renderMarkdown(text) {
+            let html = text
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+            html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+            html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+            html = html.replace(/\n\n+/g, '</p><p>');
+            html = html.replace(/\n/g, '<br>');
+            return '<p>' + html + '</p>';
+        }
+
+        // ── Load available paths ────────────────────────────────────
+        async function loadAvailablePaths() {
+            try {
+                const res = await authFetch('/api/path/available');
+                const data = await res.json();
+                const select = document.getElementById('path-select');
+                data.paths.forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name.replace('.json', '');
+                    select.appendChild(opt);
+                });
+            } catch (err) {
+                console.error('Failed to load paths:', err);
+            }
+        }
+
+        // ── Load path ───────────────────────────────────────────────
+        document.getElementById('load-btn').addEventListener('click', async () => {
+            const filename = document.getElementById('path-select').value;
+            if (!filename) return;
+
+            document.getElementById('load-btn').disabled = true;
+            document.getElementById('load-btn').textContent = 'Loading...';
+
+            try {
+                // Load
+                const loadRes = await authFetch('/api/path/load', {
+                    method: 'POST',
+                    body: JSON.stringify({ filename }),
+                });
+                const loadData = await loadRes.json();
+                if (!loadRes.ok) throw new Error(loadData.detail);
+
+                activePathId = loadData.path_id;
+                document.getElementById('topbar-goal').textContent = loadData.career_goal;
+
+                // Validate
+                showPanel('panel-validate');
+                document.getElementById('validate-status').textContent = 'Validating...';
+                document.getElementById('validate-log').textContent = 'Running validation and auto-correction...\n';
+
+                const valRes = await authFetch(`/api/path/${activePathId}/validate`, {
+                    method: 'POST',
+                });
+                const valData = await valRes.json();
+                if (!valRes.ok) throw new Error(valData.detail);
+
+                document.getElementById('validate-status').textContent =
+                    `${valData.corrected} corrected, ${valData.total_sessions - valData.flagged} passed`;
+                document.getElementById('validate-log').textContent = valData.change_log;
+
+                // Load sessions
+                await loadSessions();
+                document.getElementById('sessions-panel').style.display = '';
+
+            } catch (err) {
+                document.getElementById('validate-log').textContent = `Error: ${err.message}`;
+                document.getElementById('validate-status').textContent = 'Failed';
+            }
+
+            document.getElementById('load-btn').disabled = false;
+            document.getElementById('load-btn').textContent = 'Load Path';
+        });
+
+        // ── Load sessions ───────────────────────────────────────────
+        async function loadSessions() {
+            if (!activePathId) return;
+            const res = await authFetch(`/api/path/${activePathId}/sessions`);
+            const data = await res.json();
+
+            const list = document.getElementById('session-list');
+            list.innerHTML = '';
+
+            data.sessions.forEach(s => {
+                const item = document.createElement('div');
+                item.className = `session-item ${s.status}`;
+                const icons = {
+                    not_started: '\u25cb', in_progress: '\u25d4',
+                    completed: '\u25cf', skipped: '\u2013',
+                };
+                item.innerHTML = `
+                    <span class="session-icon">${icons[s.status] || '?'}</span>
+                    <div class="session-info">
+                        <span class="session-title">${s.title}</span>
+                        <span class="session-meta">${s.skills.join(', ')} &middot; ${s.difficulty_level}</span>
+                    </div>
+                `;
+                item.addEventListener('click', () => startStudy(s.session_number, s.title));
+                list.appendChild(item);
+            });
+        }
+
+        // ── Study mode ──────────────────────────────────────────────
+        async function startStudy(sessionNumber, title) {
+            activeSessionNumber = sessionNumber;
+            showPanel('panel-study');
+            document.getElementById('study-title').textContent = `Session ${sessionNumber}: ${title}`;
+            document.getElementById('study-messages').innerHTML =
+                '<div class="study-system-msg">Starting session... ingesting content.</div>';
+
+            try {
+                const res = await authFetch(`/api/session/${activePathId}/${sessionNumber}/start`, {
+                    method: 'POST',
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail);
+
+                document.getElementById('study-messages').innerHTML =
+                    `<div class="study-system-msg">Session ready. Ask questions about the material, or take a quiz when done.</div>`;
+            } catch (err) {
+                document.getElementById('study-messages').innerHTML =
+                    `<div class="study-system-msg error">Error: ${err.message}</div>`;
+            }
+        }
+
+        // Study send
+        async function sendStudyQuestion() {
+            const input = document.getElementById('study-input');
+            const question = input.value.trim();
+            if (!question || !activePathId || !activeSessionNumber) return;
+            input.value = '';
+
+            const msgs = document.getElementById('study-messages');
+            msgs.innerHTML += `<div class="study-msg user">${question}</div>`;
+            msgs.innerHTML += `<div class="study-msg bot typing">Thinking...</div>`;
+            msgs.scrollTop = msgs.scrollHeight;
+
+            try {
+                const res = await authFetch(`/api/session/${activePathId}/${activeSessionNumber}/ask`, {
+                    method: 'POST',
+                    body: JSON.stringify({ question }),
+                });
+                const data = await res.json();
+
+                // Remove typing indicator
+                const typing = msgs.querySelector('.typing');
+                if (typing) typing.remove();
+
+                const sourceLabel = data.source === 'document' ? 'Materials'
+                    : data.source === 'general_knowledge' ? 'General Knowledge'
+                    : 'Out of Scope';
+                const sourceClass = data.source;
+
+                msgs.innerHTML += `
+                    <div class="study-msg bot">
+                        <div class="study-msg-content">${renderMarkdown(data.answer)}</div>
+                        <span class="source-badge ${sourceClass}" style="margin-top:0.5rem;">${sourceLabel}</span>
+                    </div>`;
+            } catch (err) {
+                const typing = msgs.querySelector('.typing');
+                if (typing) typing.remove();
+                msgs.innerHTML += `<div class="study-msg bot error">Error: ${err.message}</div>`;
+            }
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        document.getElementById('study-send').addEventListener('click', sendStudyQuestion);
+        document.getElementById('study-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); sendStudyQuestion(); }
+        });
+
+        // Mark done
+        document.getElementById('study-done-btn').addEventListener('click', async () => {
+            if (!activePathId || !activeSessionNumber) return;
+            await authFetch(`/api/session/${activePathId}/${activeSessionNumber}/complete`, {
+                method: 'POST',
+            });
+            await loadSessions();
+            showPanel('panel-welcome');
+            document.getElementById('panel-welcome').querySelector('.panel-center').innerHTML =
+                '<h2>Session completed!</h2><p>Select another session from the sidebar, or take a quiz.</p>';
+        });
+
+        // Materials modal
+        document.getElementById('study-materials-btn').addEventListener('click', async () => {
+            if (!activePathId || !activeSessionNumber) return;
+            const modal = document.getElementById('materials-modal');
+            const content = document.getElementById('materials-content');
+            modal.style.display = 'flex';
+            content.innerHTML = '<p>Loading materials...</p>';
+
+            try {
+                const res = await authFetch(
+                    `/api/session/${activePathId}/${activeSessionNumber}/materials`
+                );
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail);
+
+                let html = `<div class="materials-summary">
+                    <span>Total chunks indexed: <strong>${data.total_chunks}</strong></span>
+                </div>`;
+
+                const sources = data.source_details || [];
+                if (sources.length === 0 && data.note) {
+                    html += `<p class="materials-note">${data.note}</p>`;
+                }
+
+                const groups = {pdf: [], web: [], guide: [], transcript: []};
+                sources.forEach(s => {
+                    const g = groups[s.type] || [];
+                    g.push(s);
+                    groups[s.type] = g;
+                });
+
+                if (groups.pdf.length) {
+                    html += '<h4>PDFs</h4><ul class="materials-list">';
+                    groups.pdf.forEach(s => {
+                        html += `<li><strong>${s.name}</strong><br><span class="materials-meta">${s.path || ''}</span></li>`;
+                    });
+                    html += '</ul>';
+                }
+                if (groups.web.length) {
+                    html += '<h4>Web Resources</h4><ul class="materials-list">';
+                    groups.web.forEach(s => {
+                        html += `<li><strong>${s.name}</strong> <span class="badge badge-muted">${s.category || ''}</span><br>`;
+                        if (s.url) html += `<a href="${s.url}" target="_blank" rel="noopener" class="materials-url">${s.url}</a>`;
+                        html += '</li>';
+                    });
+                    html += '</ul>';
+                }
+                if (groups.guide.length) {
+                    html += '<h4>Comprehensive Guides</h4>';
+                    groups.guide.forEach((s, idx) => {
+                        const guideId = `guide-content-${idx}`;
+                        const escaped = (s.content || '')
+                            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                            .replace(/\n/g, '<br>');
+                        html += `<div class="guide-card">
+                            <div class="guide-header" onclick="document.getElementById('${guideId}').classList.toggle('expanded')">
+                                <strong>${s.name}</strong>
+                                <span class="guide-toggle">Read Guide &#9662;</span>
+                            </div>
+                            <div class="guide-body" id="${guideId}">${escaped}</div>
+                        </div>`;
+                    });
+                }
+                if (groups.transcript.length) {
+                    html += '<h4>Video Resources</h4><ul class="materials-list">';
+                    groups.transcript.forEach(s => {
+                        html += `<li><strong>${s.name}</strong>`;
+                        if (s.status === 'extracted') {
+                            html += ' <span class="badge badge-accent" style="font-size:0.65rem;">transcribed</span>';
+                        } else if (s.status === 'extraction_failed') {
+                            html += ' <span class="badge badge-muted" style="font-size:0.65rem;">extraction failed</span>';
+                        } else if (s.status === 'unavailable') {
+                            html += ' <span class="badge badge-muted" style="font-size:0.65rem;">transcript unavailable</span>';
+                        }
+                        if (s.url) html += `<br><a href="${s.url}" target="_blank" rel="noopener" class="materials-url">${s.url}</a>`;
+                        if (s.status === 'unavailable' || s.status === 'extraction_failed') {
+                            html += `<br><span class="materials-meta">Visit directly to watch</span>`;
+                        }
+                        html += '</li>';
+                    });
+                    html += '</ul>';
+                }
+
+                if (sources.length === 0 && !data.note) {
+                    html += '<p style="color:var(--text-muted);">No sources were ingested for this session.</p>';
+                }
+
+                content.innerHTML = html;
+            } catch (err) {
+                const msg = err.message.includes('not ingested')
+                    ? 'Content has not been ingested yet. Start the session first, then check materials.'
+                    : `Error: ${err.message}`;
+                content.innerHTML = `<p class="error">${msg}</p>`;
+            }
+        });
+
+        document.getElementById('materials-close').addEventListener('click', () => {
+            document.getElementById('materials-modal').style.display = 'none';
+        });
+        document.getElementById('materials-modal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
+        });
+
+        // Quiz from study
+        document.getElementById('study-quiz-btn').addEventListener('click', () => {
+            if (activeSessionNumber) startQuiz(activeSessionNumber);
+        });
+
+        // ── Quiz ────────────────────────────────────────────────────
+        async function startQuiz(sessionNumber) {
+            activeSessionNumber = sessionNumber;
+            showPanel('panel-quiz');
+            document.getElementById('quiz-title').textContent = `Quiz: Session ${sessionNumber}`;
+            document.getElementById('quiz-content').innerHTML = '<p>Generating quiz...</p>';
+            document.getElementById('quiz-results').style.display = 'none';
+
+            try {
+                const res = await authFetch(`/api/quiz/${activePathId}/${sessionNumber}/generate`, {
+                    method: 'POST',
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail);
+
+                quizData = data;
+                renderQuiz(data);
+            } catch (err) {
+                document.getElementById('quiz-content').innerHTML = `<p class="error">Error: ${err.message}</p>`;
+            }
+        }
+
+        function renderQuiz(data) {
+            const container = document.getElementById('quiz-content');
+            document.getElementById('quiz-progress').textContent = `0/${data.total_questions}`;
+            let html = '<form id="quiz-form">';
+
+            data.questions.forEach((q, i) => {
+                const srcBadge = q.source === 'your_materials'
+                    ? '<span class="source-badge document">Materials</span>'
+                    : '<span class="source-badge general_knowledge">General</span>';
+
+                html += `<div class="quiz-question">
+                    <div class="quiz-q-header">
+                        <strong>Q${i + 1}</strong> ${srcBadge}
+                        <span class="badge badge-muted">${q.difficulty}</span>
+                    </div>`;
+
+                if (q.reference_text) {
+                    const isCode = q.reference_text.match(/^\s*(def |class |import |from |if |for |while |print\(|function |const |let |var )/m)
+                        || q.reference_text.includes('```');
+                    if (isCode) {
+                        const cleaned = q.reference_text.replace(/```\w*\n?/g, '').replace(/```/g, '');
+                        html += `<pre class="quiz-reference-code"><code>${cleaned.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</code></pre>`;
+                    } else {
+                        html += `<blockquote class="quiz-reference-text">${q.reference_text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</blockquote>`;
+                    }
+                }
+
+                html += `<p>${q.question_text}</p>`;
+
+                if (q.type === 'mcq' && q.options) {
+                    Object.entries(q.options).forEach(([key, val]) => {
+                        html += `<label class="quiz-option">
+                            <input type="radio" name="q${i}" value="${key}">
+                            <span><strong>${key})</strong> ${val}</span>
+                        </label>`;
+                    });
+                } else {
+                    html += `<textarea class="form-input quiz-textarea" name="q${i}"
+                             placeholder="Type your answer..." rows="3"></textarea>`;
+                }
+                html += '</div>';
+            });
+
+            html += '<button type="submit" class="btn btn-primary" style="margin-top:1rem;">Submit Answers</button>';
+            html += '</form>';
+            container.innerHTML = html;
+
+            document.getElementById('quiz-form').addEventListener('submit', submitQuiz);
+        }
+
+        async function submitQuiz(e) {
+            e.preventDefault();
+            if (!quizData || !activePathId || !activeSessionNumber) return;
+
+            const answers = [];
+            quizData.questions.forEach((q, i) => {
+                if (q.type === 'mcq') {
+                    const checked = document.querySelector(`input[name="q${i}"]:checked`);
+                    answers.push(checked ? checked.value : '');
+                } else {
+                    const textarea = document.querySelector(`textarea[name="q${i}"]`);
+                    answers.push(textarea ? textarea.value : '');
+                }
+            });
+
+            document.getElementById('quiz-content').innerHTML = '<p>Grading your answers...</p>';
+
+            try {
+                const res = await authFetch(`/api/quiz/${activePathId}/${activeSessionNumber}/submit`, {
+                    method: 'POST',
+                    body: JSON.stringify({ answers }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail);
+
+                renderQuizResults(data);
+                await loadSessions();
+            } catch (err) {
+                document.getElementById('quiz-content').innerHTML = `<p class="error">Error: ${err.message}</p>`;
+            }
+        }
+
+        function renderQuizResults(data) {
+            document.getElementById('quiz-content').innerHTML = '';
+            const results = document.getElementById('quiz-results');
+            results.style.display = '';
+
+            const grade = data.percentage >= 85 ? 'A' : data.percentage >= 70 ? 'B'
+                : data.percentage >= 50 ? 'C' : data.percentage >= 30 ? 'D' : 'F';
+
+            let html = `
+                <div class="quiz-score-card glass-card">
+                    <div class="quiz-grade grade-${grade.toLowerCase()}">${grade}</div>
+                    <div class="quiz-score-text">
+                        <h3>${data.percentage.toFixed(1)}%</h3>
+                        <p>${data.total_score.toFixed(0)} / ${data.max_score.toFixed(0)} points</p>
+                    </div>
+                </div>
+                <div class="quiz-skill-scores">`;
+
+            if (data.per_skill_scores) {
+                Object.entries(data.per_skill_scores).forEach(([skill, score]) => {
+                    const cls = score >= 85 ? 'mastered' : score >= 50 ? 'review' : 'weak';
+                    html += `<div class="skill-score-item ${cls}">
+                        <span>${skill}</span><span>${score.toFixed(1)}%</span>
+                    </div>`;
+                });
+            }
+
+            html += '</div><h4 style="margin:1.5rem 0 0.75rem;">Detailed Results</h4>';
+
+            data.answers.forEach((a, i) => {
+                const correct = a.score >= 50;
+                html += `<div class="quiz-answer-result ${correct ? 'correct' : 'incorrect'}">
+                    <div class="quiz-ar-header">
+                        <span>${correct ? '+' : '-'} Q${i + 1}</span>
+                        <span>${a.score.toFixed(0)}/100</span>
+                    </div>
+                    <p class="quiz-ar-question">${a.question}</p>
+                    <p class="quiz-ar-feedback">${a.feedback}</p>
+                </div>`;
+            });
+
+            results.innerHTML = html;
+        }
+
+        // ── Mastery ─────────────────────────────────────────────────
+        document.getElementById('mastery-btn').addEventListener('click', async () => {
+            if (!activePathId) return;
+            showPanel('panel-mastery');
+            const content = document.getElementById('mastery-content');
+            content.innerHTML = '<p>Loading mastery data...</p>';
+
+            try {
+                const res = await authFetch(`/api/mastery/${activePathId}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail);
+
+                let html = `
+                    <div class="mastery-overview glass-card">
+                        <div class="mastery-stat"><span class="mastery-num">${data.overall_percentage.toFixed(1)}%</span><span>Overall</span></div>
+                        <div class="mastery-stat mastered"><span class="mastery-num">${data.mastered}</span><span>Mastered</span></div>
+                        <div class="mastery-stat review"><span class="mastery-num">${data.review}</span><span>Review</span></div>
+                        <div class="mastery-stat weak"><span class="mastery-num">${data.weak}</span><span>Weak</span></div>
+                    </div>`;
+
+                if (data.skills.length > 0) {
+                    html += '<div class="mastery-skills">';
+                    data.skills.forEach(s => {
+                        html += `<div class="mastery-skill-row">
+                            <span class="mastery-skill-name">${s.skill}</span>
+                            <div class="mastery-bar-bg">
+                                <div class="mastery-bar ${s.status}" style="width:${Math.min(100, s.score)}%"></div>
+                            </div>
+                            <span class="mastery-skill-score">${s.score}%</span>
+                        </div>`;
+                    });
+                    html += '</div>';
+                } else {
+                    html += '<p style="color:var(--text-muted); margin-top:1rem;">No skills assessed yet. Complete quizzes to build your mastery profile.</p>';
+                }
+
+                content.innerHTML = html;
+            } catch (err) {
+                content.innerHTML = `<p class="error">Error: ${err.message}</p>`;
+            }
+        });
+
+        // ── Adapt ───────────────────────────────────────────────────
+        document.getElementById('adapt-btn').addEventListener('click', async () => {
+            if (!activePathId) return;
+            showPanel('panel-adapt');
+            document.getElementById('adapt-log').textContent = 'Generating adapted path...';
+
+            try {
+                const res = await authFetch(`/api/path/${activePathId}/adapt`, {
+                    method: 'POST',
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail);
+
+                document.getElementById('adapt-log').textContent = data.adaptation_log;
+                await loadSessions();
+            } catch (err) {
+                document.getElementById('adapt-log').textContent = `Error: ${err.message}`;
+            }
+        });
+
+        // ── Init ────────────────────────────────────────────────────
+        loadAvailablePaths();
+    </script>
+</body>
+</html>

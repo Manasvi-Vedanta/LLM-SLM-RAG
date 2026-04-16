@@ -28,7 +28,7 @@ from typing import List, Optional
 from langchain_community.vectorstores import FAISS
 
 import config
-from vector_store import RetrievalResult, retrieve
+from vector_store import RetrievalResult, retrieve, load_session_vectorstore
 from critic import BaseCritic, CriticResult
 
 logger = logging.getLogger(__name__)
@@ -162,6 +162,96 @@ class RAGPipeline:
                 retrieval=retrieval,
                 critic_result=critic_result,
                 metadata={
+                    "similarity_score": retrieval.best_score,
+                    "confidence": critic_result.confidence,
+                },
+            )
+
+    # ── session-scoped query ─────────────────────────────────────────
+    def session_query(self, session_id: str, question: str) -> QueryResult:
+        """Run the RAG pipeline against a session-specific vector store.
+
+        Loads the session's FAISS index, runs the same Actor → Scope Gate →
+        Critic → Confidence Gate flow, and adds session metadata to the result.
+        """
+        logger.info("Session query [%s]: %s", session_id, question[:80])
+
+        session_vs = load_session_vectorstore(session_id)
+
+        # Reuse the same pipeline logic but with the session vectorstore
+        retrieval = retrieve(
+            session_vs,
+            question,
+            k=self.top_k,
+            threshold=self.similarity_threshold,
+        )
+
+        # Scope gate
+        if not retrieval.in_scope:
+            logger.info("Session %s: out of scope (best_score=%s)",
+                        session_id, retrieval.best_score)
+            return QueryResult(
+                question=question,
+                answer="This question doesn't seem to be covered in the "
+                       "current session's materials.",
+                source="out_of_scope",
+                retrieval=retrieval,
+                metadata={
+                    "session_id": session_id,
+                    "best_score": retrieval.best_score,
+                    "threshold": self.similarity_threshold,
+                },
+            )
+
+        # Build excerpt from passing chunks
+        passing_excerpts = []
+        for chunk, score in zip(retrieval.chunks, retrieval.scores):
+            if score >= self.similarity_threshold:
+                passing_excerpts.append(chunk.page_content)
+        excerpt = (
+            "\n\n---\n\n".join(passing_excerpts)
+            if passing_excerpts
+            else retrieval.best_chunk.page_content  # type: ignore[union-attr]
+        )
+
+        # Critic validation
+        critic_result = self.critic.validate(question, excerpt)
+        logger.info("Session %s: critic confidence=%.1f%%",
+                    session_id, critic_result.confidence)
+
+        # Build source attribution from best chunk metadata
+        best_meta = retrieval.best_chunk.metadata if retrieval.best_chunk else {}  # type: ignore[union-attr]
+        source_info = best_meta.get("source", best_meta.get("resource_name", "unknown"))
+        source_type = best_meta.get("source_type", "unknown")
+
+        # Confidence gate
+        if critic_result.confidence > self.confidence_threshold:
+            formatted_answer = self.critic.format_answer(question, excerpt)
+            return QueryResult(
+                question=question,
+                answer=formatted_answer,
+                source="document",
+                retrieval=retrieval,
+                critic_result=critic_result,
+                metadata={
+                    "session_id": session_id,
+                    "source_file": source_info,
+                    "source_type": source_type,
+                    "page": best_meta.get("page", ""),
+                    "similarity_score": retrieval.best_score,
+                    "confidence": critic_result.confidence,
+                },
+            )
+        else:
+            fallback_answer = self.critic.generate_fallback_answer(question)
+            return QueryResult(
+                question=question,
+                answer=fallback_answer,
+                source="general_knowledge",
+                retrieval=retrieval,
+                critic_result=critic_result,
+                metadata={
+                    "session_id": session_id,
                     "similarity_score": retrieval.best_score,
                     "confidence": critic_result.confidence,
                 },

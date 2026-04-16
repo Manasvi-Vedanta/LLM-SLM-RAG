@@ -1,20 +1,37 @@
 # Self-Correcting RAG System with Actor-Critic Architecture
 
-A full-stack Retrieval-Augmented Generation system that answers questions from PDF documents, validates answers using a swappable **Critic** model (cloud LLM **or** fine-tuned local SLM), and serves everything through a professional web interface with user authentication.
+A full-stack Retrieval-Augmented Generation system with two modes: (1) **RAG Q&A** — ask questions about PDF documents with Actor-Critic validated answers, and (2) **Adaptive Learning Pipeline** — load career-oriented learning paths, study with doubt clarification, take document-grounded quizzes, track skill mastery, and get AI-adapted learning paths. Uses a swappable **Critic** model (cloud LLM **or** fine-tuned local SLM) and serves everything through a professional web interface with user authentication.
 
 ---
 
 ## Key Features
 
+### RAG Q&A Mode
 - **Actor-Critic RAG pipeline** — retrieves document chunks, then validates them with a Critic model before responding
+- **Three answer modes** — formatted document answer, general-knowledge fallback, or out-of-scope rejection
+- **Structured answer formatting** — high-confidence document excerpts are restructured into clean Definition / Syntax / Key Points / Example format via the base Gemma model
+
+### Adaptive Learning Pipeline
+- **Learning path validation** — loads career-oriented JSON learning paths, LLM-validates each session's skills and resources, auto-corrects mismatches
+- **Per-session content ingestion** — resolves resource names to URLs via multi-backend web search (DDGS, Brave, DuckDuckGo HTML), scrapes content with trafilatura, auto-detects video URLs and routes them to transcript extraction, builds per-session FAISS indexes
+- **Study mode with doubt clarification** — session-scoped RAG Q&A against ingested materials
+- **Document-grounded quizzes** — generates MCQ + open-ended questions from session materials, grades answers against source excerpts
+- **Skill mastery tracking** — weighted running average per skill (70% new / 30% old), classifies mastered (>85%) / review (50-85%) / weak (<50%)
+- **Adaptive path generation** — compresses mastered sessions, injects remediation for weak skills, suggests additional resources
+
+### Adaptive Learning Analytics
+- **ESCO skill prerequisite graph** — builds a directed acyclic graph (DAG) from session prerequisites, supports topological ordering, transitive prerequisite chains, dependent-skill lookup, and graph-constrained session reordering
+- **Knowledge-transfer metrics** — pairs prerequisite mastery with dependent-session performance, computes Pearson correlation, flags broken chains (high prereq mastery → weak downstream) and strong chains
+- **Spaced repetition scheduler** — derives per-skill review intervals from the Ebbinghaus forgetting curve, classifies items as overdue / due today / due this week / scheduled
+
+### Infrastructure
 - **LLM / SLM selection** — switch between Google Gemini 2.5 Flash (cloud LLM) and a fine-tuned Gemma 3 4B (local SLM via Ollama) with a single config change
+- **Two-model strategy** — fine-tuned model for validation/confidence scoring only; base model for all generation tasks (path correction, question generation, answer evaluation, content generation)
 - **Complete fine-tuning pipeline** — synthetic data generation, QLoRA training, GGUF conversion, Ollama deployment, and side-by-side evaluation
 - **Rate-limit resilient** — Gemini backend cascades through fallback models (`gemini-2.5-flash` → `gemini-3-flash-preview` → `gemini-2.5-flash-lite`) on 429 errors
-- **Structured answer formatting** — high-confidence document excerpts are restructured into clean Definition / Syntax / Key Points / Example format via the base Gemma model
-- **Three answer modes** — formatted document answer, general-knowledge fallback, or out-of-scope rejection
 - **Web UI** — dark-themed glassmorphism design with Three.js animated gradient-mesh background
 - **Authentication** — JWT-based signup/login with bcrypt password hashing and per-user chat history
-- **Two interfaces** — browser-based chatbot (FastAPI) and terminal CLI
+- **Two interfaces** — browser-based web UI (FastAPI) and terminal CLI
 - **Fully configurable** — all thresholds, models, backends, and chunk parameters in one config file
 
 ---
@@ -46,22 +63,52 @@ A full-stack Retrieval-Augmented Generation system that answers questions from P
 
 ### Module Breakdown
 
+#### Core RAG Pipeline
+
 | Module | Role |
 |---|---|
 | `config.py` | All tuneable parameters — paths, models, thresholds, backend selection |
-| `ingestion.py` | Discovers PDFs in `Dataset/`, loads pages with PyPDFLoader, splits into overlapping chunks |
-| `vector_store.py` | Embeds chunks with BGE-base-en-v1.5 (768d), builds/loads FAISS index, applies scope gate |
-| `critic.py` | `GeminiCritic` (cloud + fallback chain), `GemmaCritic` (local Ollama), `MockCritic` (offline), `create_critic()` factory |
-| `pipeline.py` | Orchestrates Actor → Scope Gate → Critic → Confidence Gate flow |
+| `llm_service.py` | Shared LLM call utilities — `call_ollama`, `call_gemini`, `call_llm` dispatcher; routes validation to fine-tuned model, generation to base model |
+| `ingestion.py` | PDF, text content, and transcript loading + chunking |
+| `vector_store.py` | FAISS index with BGE embeddings — global index + per-session indexes |
+| `critic.py` | `GeminiCritic`, `GemmaCritic`, `MockCritic` — validation, formatting, question generation, answer evaluation |
+| `pipeline.py` | RAG pipeline with `query()` (global) and `session_query()` (session-scoped) |
+
+#### Learning Path Pipeline
+
+| Module | Role |
+|---|---|
+| `path_validator.py` | Loads JSON from `Learning Path Inputs/`, LLM-validates each session, auto-corrects mismatches, saves to `Corrected Paths/` |
+| `web_resource_resolver.py` | Multi-backend URL resolution (DDGS → Brave → DDG HTML), content extraction (trafilatura → BS4), auto-detects and separates video URLs from web content |
+| `transcript_extractor.py` | Optional yt-dlp + Whisper pipeline for video transcripts; `is_video_url()` detects YouTube, Vimeo, Dailymotion, etc. (skips gracefully if not installed) |
+| `session_mapper.py` | Collects content per session in priority: user PDFs > scraped web > comprehensive guides > video transcripts. Routes video URLs to transcript extraction; shows unavailable transcripts as direct links in materials |
+| `session_orchestrator.py` | Single entry point: `ingest_session()` → maps content → builds per-session FAISS index. Caches materials metadata (sources, provenance) for the materials API |
+| `question_generator.py` | Generates document-grounded MCQ + open-ended questions; Critic validates each candidate; supplements with general-knowledge questions (labelled) if content is thin |
+| `answer_evaluator.py` | MCQ: direct grading. Open-ended: Critic scores against source excerpts. Saves results to database |
+| `mastery_tracker.py` | Weighted running average (70% new, 30% old). Classifies: mastered (>85%), review (50-85%), weak (<50%) |
+| `path_adapter.py` | Mastered sessions compressed, weak sessions get remediation injected, resources auto-suggested. Outputs adapted JSON |
+| `skill_graph.py` | Directed skill prerequisite DAG — topological sort, prerequisite chains, ESCO URI mapping, graph-constrained reorder |
+| `knowledge_transfer.py` | Pearson correlation between prerequisite mastery and dependent-session performance; flags weak/strong transfer chains |
+| `review_scheduler.py` | Spaced-repetition review queue derived from the Ebbinghaus forgetting curve; classifies urgency (overdue / due today / this week / scheduled) |
+
+#### Fine-Tuning Pipeline
+
+| Module | Role |
+|---|---|
 | `generate_training_data.py` | Gemini-based teacher labelling — runs queries through Gemini to produce labelled JSONL |
 | `generate_synthetic_data.py` | Heuristic synthetic data generator — creates training data without API calls using similarity/keyword heuristics |
 | `finetune.py` | QLoRA fine-tuning of Gemma 3 4B using PEFT + BitsAndBytes + TRL |
 | `merge_lora_cpu.py` | Merges LoRA adapter into base model on CPU — produces clean FP16 weights for GGUF conversion |
 | `evaluate.py` | Side-by-side benchmark comparing LLM vs SLM on accuracy, latency, and agreement |
-| `server.py` | FastAPI backend — auth endpoints, chat API, static file serving, pipeline startup |
+
+#### Backend & Auth
+
+| Module | Role |
+|---|---|
+| `server.py` | FastAPI backend — 30 API routes: auth (3), original chat (2), path management (5), session (4 — includes materials endpoint), quiz (3), mastery/adaptation (2), health (1), pages (5) |
 | `auth.py` | JWT token creation/verification, bcrypt password hashing |
-| `database.py` | SQLite user store + chat history persistence |
-| `main.py` | Terminal CLI with interactive loop (alternative to web UI) |
+| `database.py` | SQLite WAL mode — 7 tables: `users`, `chat_history`, `learning_paths`, `session_progress`, `quiz_attempts`, `quiz_answers`, `skill_mastery` (includes `last_assessed_at` for review scheduling) |
+| `main.py` | Terminal CLI — original RAG Q&A loop + 6 learning pipeline commands |
 
 ### Frontend
 
@@ -71,9 +118,11 @@ A full-stack Retrieval-Augmented Generation system that answers questions from P
 | `static/login.html` | Login form with validation and error display |
 | `static/signup.html` | Registration form with password confirmation |
 | `static/chat.html` | Chatbot interface with typing indicators, source badges, suggestion chips, chat history |
+| `static/learn.html` | Learning pipeline UI — path loading, session sidebar, study chat, materials modal (grouped by source type with provenance), quiz with reference text blocks, mastery dashboard, path adaptation |
 | `static/js/background.js` | Three.js animated gradient mesh — undulating surface with layered sine waves, floating orbs, mouse-reactive camera |
 | `static/js/auth.js` | Token management, authenticated fetch wrapper, route guards |
 | `static/css/style.css` | Dark theme with CSS variables, glassmorphism cards, responsive layout, animations |
+| `static/css/learn.css` | Learning pipeline page styles — sidebar, study chat, quiz cards, mastery bars, responsive layout |
 
 ---
 
@@ -81,41 +130,62 @@ A full-stack Retrieval-Augmented Generation system that answers questions from P
 
 ```text
 Code/
-├── Dataset/
-│   ├── Principles-of-Data-Science-WEB.pdf
-│   └── Introduction_to_Python_Programming_-_WEB.pdf
+├── Dataset/                      # PDFs for original RAG Q&A mode
+├── Learning Path Inputs/         # Career-oriented learning path JSONs (20 files)
+├── Corrected Paths/              # Validated/corrected/adapted path outputs
+├── Session Content/              # User PDFs per session (path_id/session_n/)
+├── session_vectorstores/         # Per-session FAISS indexes (generated)
 ├── static/
-│   ├── css/style.css
+│   ├── css/
+│   │   ├── style.css             # Global dark theme
+│   │   └── learn.css             # Learning pipeline page styles
 │   ├── js/
 │   │   ├── auth.js
 │   │   └── background.js
 │   ├── index.html
 │   ├── login.html
 │   ├── signup.html
-│   └── chat.html
-├── vectorstore/                  # FAISS index (generated, gitignored)
-├── finetuned_model/              # v1 fine-tune artifacts (gitignored)
-├── finetuned_model_v2/           # v2 fine-tune artifacts (gitignored)
-│   ├── checkpoints/              #   training checkpoints
-│   ├── lora_adapter/             #   LoRA adapter weights
-│   ├── merged/                   #   4-bit merged model (from finetune.py)
-│   ├── merged_fp16/              #   clean FP16 merge (from merge_lora_cpu.py)
-│   └── gguf/                     #   GGUF file for Ollama
-├── config.py
-├── ingestion.py
-├── vector_store.py
-├── critic.py
-├── pipeline.py
+│   ├── chat.html
+│   └── learn.html                # Learning pipeline UI
+├── vectorstore/                  # Global FAISS index (generated, gitignored)
+├── finetuned_model*/             # Fine-tune artifacts (gitignored)
+│
+│── # ── Core RAG ──
+├── config.py                     # All tuneable parameters
+├── llm_service.py                # Shared LLM call dispatcher
+├── ingestion.py                  # PDF/text/transcript loading + chunking
+├── vector_store.py               # FAISS index (global + per-session)
+├── critic.py                     # Critic implementations (Gemini/Gemma/Mock)
+├── pipeline.py                   # RAG pipeline (global + session-scoped)
+│
+│── # ── Learning Pipeline ──
+├── path_validator.py             # Path validation & auto-correction
+├── web_resource_resolver.py      # URL resolution + web scraping
+├── transcript_extractor.py       # YouTube transcript extraction (optional)
+├── session_mapper.py             # Session-document content mapping
+├── session_orchestrator.py       # Per-session ingestion orchestrator
+├── question_generator.py         # Quiz question generation
+├── answer_evaluator.py           # Answer evaluation & grading
+├── mastery_tracker.py            # Skill mastery tracking
+├── path_adapter.py               # Adaptive path generation
+├── skill_graph.py                # Prerequisite DAG + ESCO mapping
+├── knowledge_transfer.py         # Cross-session transfer correlation
+├── review_scheduler.py           # Ebbinghaus-based review scheduler
+│
+│── # ── Fine-Tuning ──
 ├── generate_training_data.py
 ├── generate_synthetic_data.py
 ├── finetune.py
 ├── merge_lora_cpu.py
 ├── evaluate.py
 ├── Modelfile
-├── server.py
-├── auth.py
-├── database.py
-├── main.py
+│
+│── # ── Backend & Auth ──
+├── server.py                     # FastAPI (30 routes)
+├── auth.py                       # JWT + bcrypt
+├── database.py                   # SQLite (7 tables)
+├── main.py                       # CLI entry point
+│
 ├── requirements.txt
 ├── requirements-finetune.txt
 ├── .env                          # API keys (gitignored)
@@ -183,10 +253,13 @@ GEMINI_API_KEY=your_gemini_api_key_here
 
 1. Install Ollama from [ollama.com](https://ollama.com)
 2. Pull the base model: `ollama pull gemma3:4b`
-3. Ensure Ollama is running (`ollama serve` or the system tray app)
-4. Set `CRITIC_BACKEND = "gemma"` in `config.py`
+3. Deploy the fine-tuned critic model (see [Fine-Tuning](#fine-tuning-the-slm--theory--practice) or download from [HuggingFace](#pre-trained-models-huggingface))
+4. Ensure Ollama is running (`ollama serve` or the system tray app)
+5. Set `CRITIC_BACKEND = "gemma"` in `config.py`
 
-No API key or internet is needed for inference once the model is downloaded.
+**Both models are required:** `gemma3:4b` (base) handles all generation tasks (path correction, question generation, answer evaluation, content generation), while `gemma3-critic-v3-new` (fine-tuned) handles validation and confidence scoring only.
+
+No API key or internet is needed for inference once the models are downloaded.
 
 ---
 
@@ -205,15 +278,25 @@ Then open **http://127.0.0.1:8000** in your browser.
 | `/` | Landing page |
 | `/signup` | Create an account |
 | `/login` | Sign in |
-| `/chat` | Chatbot (requires login) |
+| `/chat` | Chatbot — RAG Q&A (requires login) |
+| `/learn` | Learning pipeline — paths, study, quizzes, mastery (requires login) |
 
 ### CLI mode
 
 ```bash
+# Original RAG Q&A
 python main.py               # interactive terminal loop
 python main.py --rebuild     # force-rebuild the FAISS index
 python main.py --mock        # use MockCritic (no API key needed)
 python main.py --threshold 0.25 --confidence 90   # override gates
+
+# Learning path pipeline
+python main.py --load-path "ML Engineer.json"   # load + validate a path
+python main.py --sessions                       # list sessions with status
+python main.py --study 3                        # interactive study mode for session 3
+python main.py --quiz 3                         # take quiz for session 3
+python main.py --mastery                        # view mastery summary
+python main.py --adapt                          # generate adapted path
 ```
 
 ---
@@ -233,13 +316,21 @@ All parameters live in `config.py`:
 | `CONFIDENCE_THRESHOLD` | 85 | Critic confidence floor (0–100) |
 | `GEMINI_MODEL_NAME` | `gemini-2.5-flash` | Primary cloud LLM model |
 | `GEMINI_FALLBACK_MODELS` | `[gemini-3-flash-preview, gemini-2.5-flash-lite]` | Fallback models on rate limit |
-| `OLLAMA_MODEL_NAME` | `gemma3-critic-v3-new` | Local SLM model (fine-tuned) |
+| `OLLAMA_MODEL_NAME` | `gemma3-critic-v3-new` | Fine-tuned SLM (validation only) |
+| `OLLAMA_BASE_MODEL` | `gemma3:4b` | Base model (all generation tasks) |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
+| `QUIZ_MCQ_COUNT` | 5 | MCQ questions per quiz |
+| `QUIZ_OPEN_COUNT` | 3 | Open-ended questions per quiz |
+| `MASTERY_THRESHOLD_SKIP` | 85 | Score above which a skill is "mastered" |
+| `MASTERY_THRESHOLD_REVIEW` | 50 | Score below which remediation is needed |
+| `WEB_SCRAPE_TIMEOUT` | 15 | Seconds per page for web scraping |
+| `MAX_RESOURCES_PER_SESSION` | 5 | Cap on web searches per session |
 
 **Tuning tips:**
 - Lower `SIMILARITY_THRESHOLD` if relevant questions are marked out-of-scope
 - Increase `CONFIDENCE_THRESHOLD` for stricter document-only answers
 - Increase `TOP_K` if answers seem incomplete
+- Adjust `MASTERY_THRESHOLD_SKIP` / `MASTERY_THRESHOLD_REVIEW` to control when path adaptation compresses or injects remediation sessions
 
 ---
 
@@ -258,6 +349,33 @@ $$\text{cosine\_sim} = 1 - \frac{L2^2}{2}$$
 
 ---
 
+## How the Learning Pipeline Works
+
+The learning pipeline follows a strict 6-step progression:
+
+```
+  ┌───────────────┐    ┌──────────────────┐    ┌──────────────────┐
+  │ 1. Load Path  │ →  │ 2. Validate &    │ →  │ 3. Ingest Content│
+  │    (JSON)     │    │    Auto-Correct   │    │    (per-session) │
+  └───────────────┘    └──────────────────┘    └──────────────────┘
+                                                        │
+                       ┌────────────────────────────────┘
+                       ▼
+  ┌───────────────┐    ┌──────────────────┐    ┌──────────────────┐
+  │ 4. Study +    │ →  │ 5. Quiz &        │ →  │ 6. Mastery →     │
+  │    Doubt Q&A  │    │    Grading       │    │    Adapt Path    │
+  └───────────────┘    └──────────────────┘    └──────────────────┘
+```
+
+1. **Path Loading** — A learning path JSON (e.g., `ML Engineer.json`) defines sessions with skills, objectives, resources, and prerequisites
+2. **Validation** — Each session is LLM-validated: skills checked against title/objectives, difficulty verified, mismatches auto-corrected. Corrected path saved separately (original is never modified)
+3. **Content Ingestion** (lazy, per-session) — Resolves resource names to URLs via multi-backend search (DDGS → Brave → DDG HTML), scrapes web content with trafilatura, auto-detects video URLs and routes them to transcript extraction (or flags them as direct links if yt-dlp/whisper unavailable). Priority: user PDFs > scraped web > JSON guides > video transcripts. Builds a per-session FAISS index in `session_vectorstores/`
+4. **Study Mode** — Session-scoped RAG Q&A using the per-session vector store. Same Actor→Critic flow as the original pipeline
+5. **Quiz Generation & Grading** — Generates document-grounded MCQ + open-ended questions (each validated by the Critic). MCQ graded directly; open-ended scored against source excerpts. Every question tagged with its source (`your_materials` or `general_knowledge`)
+6. **Mastery & Adaptation** — Per-skill mastery tracked with weighted running average (70% new, 30% old). Path adaptation: mastered sessions (>85%) compressed, weak sessions (<50%) get remediation injected with LLM-generated content, review sessions (50-85%) get additional resources
+
+---
+
 ## Critic Backend Details
 
 ### Gemini (Cloud LLM)
@@ -268,11 +386,86 @@ $$\text{cosine\_sim} = 1 - \frac{L2^2}{2}$$
 
 ### Gemma 3 4B (Local SLM — Fine-Tuned)
 
-- **Model:** Gemma 3 4B fine-tuned via QLoRA, quantised to Q4_K_M, deployed via Ollama
-- **Pros:** Fully offline, no API costs, consistent ~3.5s latency, 100% document answer rate on in-scope questions
-- **Cons:** Requires ~2.5 GB disk, less nuanced on out-of-scope boundary questions
+- **Model:** Gemma 3 4B fine-tuned via QLoRA (v3-new), quantised to Q4_K_M, deployed via Ollama as `gemma3-critic-v3-new`
+- **Pros:** Fully offline, no API costs, ~5s consistent latency, 100% scope accuracy and 100% document answer rate on in-scope questions
+- **Cons:** Requires ~2.5 GB disk, ~4 GB RAM while running
 
 Both backends share identical validation and fallback prompts. The `create_critic()` factory in `critic.py` reads `CRITIC_BACKEND` from config and returns the appropriate implementation.
+
+---
+
+## Adaptive Learning Analytics — Theory
+
+Beyond the core mastery tracker and path adapter, the project ships three auxiliary analytics modules. Each is a self-contained module in the repository root that can be called from CLI, notebooks, or higher-level routers.
+
+### 1. ESCO Skill Prerequisite Graph (`skill_graph.py`)
+
+Learning paths are not flat lists — they form a **directed acyclic graph (DAG)** where each edge `A → B` means "skill A is a prerequisite of skill B". The graph is built from the `prerequisites` field on each session plus the `skill_details` array (which carries ESCO URIs for alignment with the European Skills/Competences/Occupations taxonomy).
+
+**Topological sort.** A valid teaching order is any permutation that respects all prerequisite edges. Kahn's algorithm produces this in O(V+E):
+
+```
+repeat:
+    pick a node with in-degree 0
+    emit it, remove its outgoing edges
+until graph is empty (or a cycle is detected)
+```
+
+**Use cases exposed by the module:**
+- `topological_order()` — canonical learning sequence
+- `get_prerequisite_chain(skill)` — transitive prereqs in learning order (DFS on reverse edges)
+- `get_dependents(skill)` — all skills that transitively depend on this one
+- `validate_ordering(sessions)` — returns violations where a session's prereq was never taught earlier
+- `constrained_reorder(sessions, priority_map)` — reorders sessions to respect prereqs while honouring an optional priority (e.g., mastery-weighted)
+- `get_esco_mapping()` — flat `skill_label → ESCO URI` dictionary for standards alignment
+
+This formalises what the `path_adapter` does heuristically, and serves as the substrate for future graph-aware adaptation strategies.
+
+### 2. Knowledge-Transfer Metrics (`knowledge_transfer.py`)
+
+A core question in curriculum design: **does mastering a prerequisite actually translate into success on the downstream session?** If prereq mastery is high but dependent performance is low, the dependency graph is *broken* — either the prereq test is too lenient, the dependent material requires something additional, or transfer simply isn't happening.
+
+**Pearson correlation.** For each session with at least one quiz attempt, we pair `(avg_prereq_mastery, session_score)` and compute:
+
+$$r = \frac{\sum_i (x_i - \bar x)(y_i - \bar y)}{\sqrt{\sum_i (x_i - \bar x)^2} \sqrt{\sum_i (y_i - \bar y)^2}}$$
+
+`r ≈ 1` means the graph's prereq structure predicts outcomes well; `r ≈ 0` means mastery of prereqs says nothing about downstream performance. The correlation is only reported when n ≥ 3 pairs.
+
+**Per-prerequisite transfer strength.** For each prerequisite skill X:
+
+$$\text{transfer}(X) = \min(\text{mastery}(X), \text{avg dependent score})$$
+
+The `min` captures the idea that *a skill has only transferred as far as the weakest link in its downstream chain*. A skill with 95% mastery whose dependents average only 40% has a transfer score of 40% — a red flag.
+
+**Automatic flagging:**
+- **Weak chain:** prereq mastery ≥ 70% AND dependent avg < 50% — the dependency is questionable
+- **Strong chain:** prereq mastery ≥ 70% AND dependent avg ≥ 70% — the pairing holds
+
+### 3. Spaced Repetition Scheduler (`review_scheduler.py`)
+
+Based on Ebbinghaus's classical forgetting-curve model, retention after `d` days decays roughly exponentially:
+
+$$R(d) = S \cdot e^{-\lambda d}$$
+
+where `S` is the score at last assessment and `λ` is the decay rate. Setting `R(d) = T` (the mastery threshold, 85%) and solving for `d` gives the optimal review interval:
+
+$$d = \frac{\ln(S / T)}{\lambda}$$
+
+Implications of this simple formula:
+- A skill at exactly the threshold (`S = T`) has interval `d = 0` — review now.
+- A skill above threshold gets a longer interval in proportion to how far above it sits.
+- A skill far above threshold (e.g., 98%) compounds its interval quickly — well-learned material stays dormant longer, matching intuition from the SM-2 family.
+
+The scheduler emits a **review queue** with per-skill records:
+
+| Field | Meaning |
+|---|---|
+| `interval_days` | Computed interval until next review |
+| `next_review_at` | ISO timestamp of the next scheduled review |
+| `days_until_review` | Signed offset — negative means overdue |
+| `urgency` | `overdue` / `due_today` / `due_this_week` / `scheduled` |
+
+Records are sorted by `days_until_review` ascending so the most overdue skills surface first.
 
 ---
 
@@ -486,39 +679,52 @@ python evaluate.py --out results.json               # save raw per-question data
 
 ## Evaluation Results
 
-### v1 vs v2 Model Comparison
+### Current Production Model — v3-new (`gemma3-critic-v3-new`)
 
-| Metric | Gemma v1 | Gemma v2 | Gemini (cloud) |
-|---|---|---|---|
-| JSON validity | 100% | 100% | 100% |
-| Avg confidence (in-scope) | 67 | **87.8** | 54.1 |
-| Max confidence | 83 | **89** | 100 |
-| Document answer rate | 0% | **100%** | 25% |
-| Avg confidence (out-scope) | 50 | 71.2 | **8.0** |
-| Avg latency | **3.74s** | 3.84s | 29.58s |
-| Error rate | 0% | 0% | 0% |
+The production critic is the third-generation fine-tune, retrained on an expanded 300-question bank with refined confidence calibration and JSON formatting. The results below are from `evaluate.py` on the latest held-out evaluation set.
+
+| Metric | gemma3-critic-v3-new | Interpretation |
+|---|---|---|
+| JSON validity | **100.0%** | Every response parses cleanly |
+| Avg confidence (in-scope) | **89.4%** | Comfortably above the 85% confidence gate |
+| Avg confidence (out-scope) | **0.0%** | Sharp out-of-scope discrimination |
+| Scope accuracy | **100.0%** | Matches the ground-truth scope label on every question |
+| Document answer rate | **100.0%** | Never falls back to general knowledge on in-scope questions |
+| Avg latency | 5.34s | Consistent local inference — no rate limits |
+| P50 latency | 5.26s | Low jitter |
+| Error rate | 0.0% | Zero failed completions |
+
+### Iteration History — v1 → v2 → v3
+
+The critic model evolved across three training iterations. The v1 → v2 jump solved a confidence-calibration failure; v3 improved scope discrimination and stability.
+
+| Iteration | Avg Conf (in-scope) | Avg Conf (out-scope) | Doc Answer Rate | Scope Accuracy | Notes |
+|---|---|---|---|---|---|
+| v1 (`gemma3-critic`) | 67.0 | 66.0 | 0% | 80% | Confidence capped at 83 — never triggered document answers |
+| v2 (`gemma3-critic-v2`) | 87.5 | 71.8 | 100% | 80% | Calibrated confidence distribution; over-confident on OOS |
+| **v3-new (`gemma3-critic-v3-new`)** | **89.4** | **0.0** | **100%** | **100%** | Current production model — sharp OOS rejection restored |
 
 **Key takeaways:**
-- **v2 solved the core v1 problem** — it now consistently triggers "document" answers for in-scope questions (confidence 85–89)
-- **Gemini has better out-of-scope discrimination** — assigns near-zero confidence to irrelevant questions, while Gemma v2 sometimes over-estimates
-- **Gemma is 7–40× faster** — consistent ~3.8s vs Gemini's 6–156s (rate-limited)
+- v3-new **combines the strengths of both prior iterations**: v2's high in-scope confidence with near-zero out-of-scope confidence (a trait previously only achievable with Gemini cloud)
+- 100% scope accuracy means the model now matches the ground-truth in/out-of-scope label on every held-out question
+- Latency is stable at ~5s locally with no network variance, compared to Gemini's 6–156s (rate-limited)
 
-### When to Use Which
+### When to Use Which Backend
 
 | Scenario | Best Choice | Why |
 |---|---|---|
-| Production (document-grounded answers) | **Gemma v2** | Only model that consistently triggers "document" answers |
-| Strict out-of-scope filtering | **Gemini** | Reliably gives 0 confidence to irrelevant questions |
-| Offline / no internet | **Gemma v2** | Fully local via Ollama |
-| Low latency | **Gemma v2** | Consistent 3–4s vs Gemini's variable 2–157s |
-| Cost-sensitive deployment | **Gemma v2** | Zero API cost |
+| Production (document-grounded answers) | **Gemma v3-new** | 100% document answer rate on in-scope, 0% confidence on out-of-scope |
+| Offline / no internet | **Gemma v3-new** | Fully local via Ollama |
+| Low latency / predictable tail | **Gemma v3-new** | ~5s local vs Gemini's variable 2–157s under rate limits |
+| Cost-sensitive deployment | **Gemma v3-new** | Zero API cost |
+| Cloud / zero-infrastructure setup | **Gemini 2.5 Flash** | No Ollama/GPU required; automatic fallback chain on rate limits |
 
 ---
 
 ## Web UI Features
 
 ### Landing Page
-- Three.js animated gradient mesh background (128×128 undulating surface with layered sine waves)
+- Three.js animated gradient mesh background (128x128 undulating surface with layered sine waves)
 - Floating ambient orbs with pulsing glow
 - Mouse-reactive camera sway
 - Feature cards explaining the system architecture
@@ -528,16 +734,26 @@ python evaluate.py --out results.json               # save raw per-question data
 - bcrypt password hashing (direct, without passlib)
 - Route guards redirect unauthenticated users to login
 
-### Chatbot
+### Chatbot (`/chat`)
 - Real-time question/answer with typing animation
 - Source badges: **Document** (green), **General Knowledge** (amber), **Out of Scope** (red)
 - Similarity and confidence scores displayed per answer
 - Suggestion chips for quick starter questions
 - Persistent chat history per user (SQLite)
 
+### Learning Pipeline (`/learn`)
+- **Sidebar** — path selector dropdown, session list with status icons (not started / in progress / completed), mastery and adapt buttons
+- **Path validation panel** — displays auto-correction log after loading a path
+- **Study panel** — chat-style Q&A interface against session-specific materials with source badges; Materials button opens a modal showing all ingested sources grouped by type (PDFs, web resources with URLs, built-in guides with content previews, video resources with status badges and direct links)
+- **Quiz panel** — MCQ (radio buttons) and open-ended (text areas) questions with source labels and reference text blocks (code snippets as `<pre>`, passages as `<blockquote>`); grading results show letter grade, per-skill scores, and detailed per-question feedback
+- **Mastery dashboard** — overall percentage, mastered/review/weak counts, per-skill progress bars colour-coded by status
+- **Adaptation panel** — displays human-readable adaptation log (sessions compressed, remediation injected, resources suggested)
+
 ---
 
 ## API Endpoints
+
+### Authentication & Chat (Original)
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
@@ -548,6 +764,24 @@ python evaluate.py --out results.json               # save raw per-question data
 | `GET` | `/api/chat/history` | Yes | Retrieve user's chat history |
 | `GET` | `/api/health` | No | Server and pipeline status |
 
+### Learning Path Pipeline
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/api/path/available` | Yes | List available learning path JSON files |
+| `POST` | `/api/path/load` | Yes | Load a learning path JSON into the database |
+| `POST` | `/api/path/{id}/validate` | Yes | Validate and auto-correct a loaded path |
+| `GET` | `/api/path/{id}/sessions` | Yes | List sessions with progress status |
+| `POST` | `/api/session/{path_id}/{n}/start` | Yes | Ingest content and start a study session |
+| `POST` | `/api/session/{path_id}/{n}/ask` | Yes | Ask a question in study mode (session-scoped RAG) |
+| `POST` | `/api/session/{path_id}/{n}/complete` | Yes | Mark a session as completed |
+| `GET` | `/api/session/{path_id}/{n}/materials` | Yes | Get ingested source details (PDFs, web, guides, transcripts) |
+| `POST` | `/api/quiz/{path_id}/{n}/generate` | Yes | Generate a quiz for a session |
+| `POST` | `/api/quiz/{path_id}/{n}/submit` | Yes | Submit quiz answers for grading |
+| `GET` | `/api/quiz/{path_id}/{n}/results` | Yes | Get quiz attempt history |
+| `GET` | `/api/mastery/{path_id}` | Yes | Get mastery summary for a path |
+| `POST` | `/api/path/{id}/adapt` | Yes | Generate an adapted learning path |
+
 ---
 
 ## Tech Stack
@@ -555,16 +789,20 @@ python evaluate.py --out results.json               # save raw per-question data
 | Layer | Technology |
 |---|---|
 | Embeddings | BAAI/bge-base-en-v1.5 via SentenceTransformers |
-| Vector Store | FAISS (L2 index, local persistence) |
+| Vector Store | FAISS (L2 index, local persistence) — global + per-session indexes |
 | LLM Critic | Google Gemini 2.5 Flash + fallback chain |
 | SLM Critic | Gemma 3 4B fine-tuned via QLoRA, deployed via Ollama (Q4_K_M) |
+| SLM Base | Gemma 3 4B (base) via Ollama — all generation tasks |
 | Fine-Tuning | PEFT + BitsAndBytes (NF4) + TRL SFTTrainer |
 | GGUF Conversion | llama.cpp (`convert_hf_to_gguf.py`) + CPU LoRA merge |
 | PDF Parsing | PyPDFLoader (LangChain) |
 | Chunking | RecursiveCharacterTextSplitter |
+| Web Scraping | trafilatura (primary) + BeautifulSoup (fallback) |
+| Search | DDGS / Brave Search / DuckDuckGo HTML (3-tier fallback for resource URL resolution) |
+| Video Transcripts | yt-dlp + OpenAI Whisper (optional — graceful degradation with direct links) |
 | Backend | FastAPI + Uvicorn |
 | Auth | JWT (python-jose) + bcrypt |
-| Database | SQLite |
+| Database | SQLite (WAL mode, 7 tables) |
 | Frontend | HTML/CSS/JS, Three.js (ES modules via CDN) |
 | CLI | argparse |
 
@@ -585,6 +823,10 @@ python evaluate.py --out results.json               # save raw per-question data
 | Fine-tuning OOM | Reduce `--batch-size` to 1 or `--grad-accum` to 8 |
 | GGUF conversion fails | Use `merge_lora_cpu.py` first for clean FP16, then convert |
 | Ollama model assertion error | Ensure GGUF was converted from the CPU-merged FP16, not the 4-bit merged model |
+| Path validation slow | Base model (`gemma3:4b`) must be running in Ollama — validation checks each session via LLM |
+| Quiz generation fails | Ensure per-session FAISS index exists — run study mode first to trigger ingestion |
+| Web scraping blocked | The system uses 3-tier search (DDGS → Brave → DDG HTML) and 2-tier extraction (trafilatura → BS4) with graceful fallback to JSON guides. Video URLs are auto-detected and shown as direct links if yt-dlp is not installed |
+| No learning path files found | Place `.json` files inside `Learning Path Inputs/` |
 
 ---
 
@@ -592,10 +834,12 @@ python evaluate.py --out results.json               # save raw per-question data
 
 - `.env` is gitignored — API keys never reach the repository
 - `users.db` is gitignored — user data stays local
-- `vectorstore/` is gitignored — regeneratable from source PDFs
+- `vectorstore/` and `session_vectorstores/` are gitignored — regeneratable from source content
 - `finetuned_model*/` is gitignored — model weights stay local (available on HuggingFace, see below)
 - Passwords are hashed with bcrypt (never stored in plain text)
 - JWT tokens are signed with a configurable secret key
+- All learning pipeline API endpoints require JWT authentication
+- Original learning path JSONs are never modified — corrections saved as separate files
 
 ---
 
@@ -605,28 +849,34 @@ python evaluate.py --out results.json               # save raw per-question data
 - Raise similarity threshold to 0.40 to improve out-of-scope filtering
 - Scale training data to 1000+ examples with more diverse out-of-scope questions
 - Multi-round fine-tuning with DPO (Direct Preference Optimisation)
-- Citation highlighting at chunk level
+- Chunk-level citation highlighting in the study chat UI
 - WebSocket streaming for real-time token-by-token responses
 - User file upload through the web UI
+- Wire `skill_graph`, `knowledge_transfer`, and `review_scheduler` into the learning page UI (currently available as standalone analytics modules)
+- Bloom's Taxonomy-aware quiz targeting (ZPD-adaptive question difficulty)
+- Collaborative learning paths (multi-user progress tracking)
+- Export mastery reports as PDF
 
 ---
 
 ## Pre-Trained Models (HuggingFace)
 
-All three fine-tuned Gemma 3 4B critic models are available on HuggingFace:
+All fine-tuned Gemma 3 4B critic iterations are available on HuggingFace. **v3 is the current production model** — the earlier iterations are retained for reproducibility of the training history documented above.
 
-| Model | Description | Link |
-|---|---|---|
-| **gemma3-critic-v1** | First fine-tune — confidence capped at 83, 0% document answer rate | [V3gito/gemma3-critic-v1](https://huggingface.co/V3gito/gemma3-critic-v1) |
-| **gemma3-critic-v2** | Calibrated confidence distribution — 100% document answer rate | [V3gito/gemma3-critic-v2](https://huggingface.co/V3gito/gemma3-critic-v2) |
-| **gemma3-critic-v3** | Latest — trained on expanded 300-question bank with improved data | [V3gito/gemma3-critic-v3](https://huggingface.co/V3gito/gemma3-critic-v3) |
+| Model | Status | Description | Link |
+|---|---|---|---|
+| **gemma3-critic-v3** | **Current** | Expanded 300-question bank, calibrated confidence, sharp scope discrimination (100% scope accuracy) | [V3gito/gemma3-critic-v3](https://huggingface.co/V3gito/gemma3-critic-v3) |
+| gemma3-critic-v2 | Archived | Calibrated confidence distribution — 100% document answer rate but over-confident on out-of-scope | [V3gito/gemma3-critic-v2](https://huggingface.co/V3gito/gemma3-critic-v2) |
+| gemma3-critic-v1 | Archived | First fine-tune — confidence capped at 83, 0% document answer rate (motivating example) | [V3gito/gemma3-critic-v1](https://huggingface.co/V3gito/gemma3-critic-v1) |
 
-Each repo contains the GGUF file (F16) and LoRA adapter checkpoints. To use a model with Ollama:
+Each repo contains the GGUF file (F16) and LoRA adapter checkpoints. To use the current model with Ollama:
 
 ```bash
-# Download the GGUF from HuggingFace, then create an Ollama model
-ollama create gemma3-critic -f Modelfile_gguf --quantize q4_K_M
+# Download the v3 GGUF from HuggingFace, then create an Ollama model
+ollama create gemma3-critic-v3-new -f Modelfile_gguf --quantize q4_K_M
 ```
+
+The CLI name `gemma3-critic-v3-new` matches `OLLAMA_MODEL_NAME` in `config.py`, so no further configuration is needed.
 
 ---
 

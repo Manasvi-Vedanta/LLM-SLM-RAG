@@ -1,0 +1,746 @@
+/* ═══════════════════════════════════════════════════════════════════
+   learn.css – Learning pipeline UI styles
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Top bar ────────────────────────────────────────────────────── */
+.learn-topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1.5rem;
+    background: rgba(10, 10, 15, 0.85);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border-glass);
+}
+
+.learn-topbar-left,
+.learn-topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.topbar-sep {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.topbar-label {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.btn-sm {
+    padding: 0.35rem 0.85rem;
+    font-size: 0.8rem;
+}
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+.learn-layout {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    height: 100vh;
+    padding-top: 52px; /* topbar height */
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────── */
+.learn-sidebar {
+    width: 280px;
+    min-width: 280px;
+    padding: 1.25rem;
+    border-radius: 0;
+    border-right: 1px solid var(--border-glass);
+    border-left: none;
+    border-top: none;
+    border-bottom: none;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.sidebar-section h4 {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin-bottom: 0.6rem;
+}
+
+/* ── Session list ───────────────────────────────────────────────── */
+.session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    max-height: calc(100vh - 320px);
+    overflow-y: auto;
+}
+
+.session-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: var(--transition);
+    border: 1px solid transparent;
+}
+
+.session-item:hover {
+    background: var(--bg-glass);
+    border-color: var(--border-glass);
+}
+
+.session-item.completed {
+    border-left: 3px solid var(--success);
+}
+
+.session-item.in_progress {
+    border-left: 3px solid var(--accent);
+}
+
+.session-icon {
+    font-size: 0.9rem;
+    margin-top: 0.15rem;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+
+.session-item.completed .session-icon { color: var(--success); }
+.session-item.in_progress .session-icon { color: var(--accent); }
+
+.session-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.session-title {
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.session-meta {
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Main content area ──────────────────────────────────────────── */
+.learn-main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.5rem 2rem;
+}
+
+.learn-panel {
+    max-width: 900px;
+    margin: 0 auto;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.panel-center {
+    text-align: center;
+    padding: 4rem 1rem;
+    color: var(--text-secondary);
+}
+
+.panel-center h2 {
+    font-size: 1.8rem;
+    color: var(--text-primary);
+    margin-bottom: 0.75rem;
+}
+
+.panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.25rem;
+}
+
+.panel-header h3 {
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+/* ── Badges ─────────────────────────────────────────────────────── */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.65rem;
+    border-radius: 50px;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.badge-accent {
+    background: rgba(108, 99, 255, 0.15);
+    color: var(--accent);
+    border: 1px solid rgba(108, 99, 255, 0.3);
+}
+
+.badge-muted {
+    background: var(--bg-glass);
+    color: var(--text-muted);
+    border: 1px solid var(--border-glass);
+}
+
+/* ── Log output ─────────────────────────────────────────────────── */
+.log-output {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    font-family: 'Courier New', monospace;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    color: var(--text-secondary);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+/* ── Study panel ────────────────────────────────────────────────── */
+.study-chat {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius);
+    padding: 1rem;
+    height: 55vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.study-chat::-webkit-scrollbar {
+    width: 5px;
+}
+.study-chat::-webkit-scrollbar-track {
+    background: transparent;
+}
+.study-chat::-webkit-scrollbar-thumb {
+    background: var(--border-glass);
+    border-radius: 3px;
+}
+
+.study-msg {
+    max-width: 80%;
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius);
+    font-size: 0.88rem;
+    line-height: 1.6;
+    animation: fadeIn 0.25s ease;
+}
+
+.study-msg.user {
+    align-self: flex-end;
+    background: linear-gradient(135deg, var(--accent), #5a52d5);
+    color: #fff;
+    border-bottom-right-radius: 4px;
+}
+
+.study-msg.bot {
+    align-self: flex-start;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-glass);
+    color: var(--text-primary);
+    border-bottom-left-radius: 4px;
+}
+
+.study-msg.bot.typing {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.study-msg.bot.error,
+.study-system-msg.error {
+    color: var(--error);
+}
+
+.study-msg-content p {
+    margin: 0 0 0.5rem;
+}
+.study-msg-content p:last-child {
+    margin-bottom: 0;
+}
+.study-msg-content code {
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.82rem;
+}
+.study-msg-content pre {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.75rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+}
+.study-msg-content ul {
+    padding-left: 1.25rem;
+    margin: 0.25rem 0;
+}
+
+.study-system-msg {
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 0.5rem;
+}
+
+.study-input-area {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.study-input-area .form-input {
+    flex: 1;
+}
+
+/* ── Quiz panel ─────────────────────────────────────────────────── */
+.quiz-question {
+    background: var(--bg-glass);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius);
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.quiz-q-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+}
+
+.quiz-question p {
+    font-size: 0.92rem;
+    margin-bottom: 0.75rem;
+    line-height: 1.6;
+}
+
+.quiz-option {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.55rem 0.85rem;
+    margin-bottom: 0.35rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: var(--transition);
+    font-size: 0.88rem;
+}
+
+.quiz-option:hover {
+    background: var(--bg-glass);
+}
+
+.quiz-option input[type="radio"] {
+    accent-color: var(--accent);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.quiz-textarea {
+    min-height: 60px;
+    resize: vertical;
+}
+
+.quiz-reference-text {
+    margin: 0.5rem 0 0.75rem;
+    padding: 0.75rem 1rem;
+    border-left: 3px solid var(--accent);
+    background: rgba(108, 99, 255, 0.06);
+    border-radius: 0 8px 8px 0;
+    font-size: 0.84rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+
+.quiz-reference-code {
+    margin: 0.5rem 0 0.75rem;
+    padding: 0.75rem 1rem;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--border-glass);
+    border-radius: 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+    overflow-x: auto;
+    white-space: pre;
+}
+
+.quiz-reference-code code {
+    background: none;
+    padding: 0;
+}
+
+/* ── Quiz results ───────────────────────────────────────────────── */
+.quiz-score-card {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 1.5rem 2rem;
+    margin-bottom: 1.5rem;
+}
+
+.quiz-grade {
+    font-size: 2.5rem;
+    font-weight: 800;
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.quiz-grade.grade-a { background: rgba(0, 212, 170, 0.15); color: var(--success); border: 2px solid var(--success); }
+.quiz-grade.grade-b { background: rgba(108, 99, 255, 0.15); color: var(--accent); border: 2px solid var(--accent); }
+.quiz-grade.grade-c { background: rgba(255, 165, 2, 0.15); color: var(--warning); border: 2px solid var(--warning); }
+.quiz-grade.grade-d { background: rgba(255, 71, 87, 0.1); color: var(--error); border: 2px solid rgba(255, 71, 87, 0.5); }
+.quiz-grade.grade-f { background: rgba(255, 71, 87, 0.2); color: var(--error); border: 2px solid var(--error); }
+
+.quiz-score-text h3 {
+    font-size: 1.5rem;
+    margin-bottom: 0.2rem;
+}
+
+.quiz-score-text p {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.quiz-skill-scores {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-bottom: 1.5rem;
+}
+
+.skill-score-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.85rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    background: var(--bg-glass);
+    border-left: 3px solid var(--text-muted);
+}
+
+.skill-score-item.mastered { border-left-color: var(--success); }
+.skill-score-item.review { border-left-color: var(--warning); }
+.skill-score-item.weak { border-left-color: var(--error); }
+
+.quiz-answer-result {
+    padding: 0.85rem 1rem;
+    border-radius: var(--radius);
+    margin-bottom: 0.6rem;
+    border-left: 3px solid var(--text-muted);
+    background: var(--bg-glass);
+}
+
+.quiz-answer-result.correct { border-left-color: var(--success); }
+.quiz-answer-result.incorrect { border-left-color: var(--error); }
+
+.quiz-ar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+    font-size: 0.85rem;
+    margin-bottom: 0.35rem;
+}
+
+.quiz-ar-question {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+}
+
+.quiz-ar-feedback {
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+
+/* ── Mastery panel ──────────────────────────────────────────────── */
+.mastery-overview {
+    display: flex;
+    justify-content: space-around;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    text-align: center;
+}
+
+.mastery-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.mastery-stat span:first-child {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.mastery-num {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+
+.mastery-stat.mastered .mastery-num { color: var(--success); }
+.mastery-stat.review .mastery-num { color: var(--warning); }
+.mastery-stat.weak .mastery-num { color: var(--error); }
+
+.mastery-skills {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.mastery-skill-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+}
+
+.mastery-skill-name {
+    width: 160px;
+    min-width: 160px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-secondary);
+}
+
+.mastery-bar-bg {
+    flex: 1;
+    height: 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.mastery-bar {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.5s ease;
+}
+
+.mastery-bar.mastered { background: var(--success); }
+.mastery-bar.review { background: var(--warning); }
+.mastery-bar.weak { background: var(--error); }
+.mastery-bar.not_assessed { background: var(--text-muted); }
+
+.mastery-skill-score {
+    width: 45px;
+    text-align: right;
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+/* ── Materials modal ─────────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-card {
+    width: 90%;
+    max-width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border-glass);
+}
+
+.modal-header h3 {
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+.modal-body {
+    padding: 1.25rem 1.5rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.materials-summary {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-glass);
+}
+
+.materials-note {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    font-style: italic;
+    margin: 0.5rem 0;
+}
+
+.modal-body h4 {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin: 1rem 0 0.5rem;
+}
+
+.modal-body h4:first-of-type {
+    margin-top: 0;
+}
+
+.materials-list {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.materials-list li {
+    padding: 0.6rem 0.75rem;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.materials-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.materials-url {
+    font-size: 0.75rem;
+    color: var(--accent);
+    word-break: break-all;
+}
+
+/* ── Guide cards (expandable reading material) ─────────────────── */
+.guide-card {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+.guide-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.6rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.15s;
+}
+.guide-header:hover {
+    background: rgba(255,255,255,0.04);
+}
+.guide-toggle {
+    font-size: 0.75rem;
+    color: var(--accent);
+    white-space: nowrap;
+}
+.guide-body {
+    max-height: 0;
+    overflow: hidden;
+    padding: 0 0.75rem;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    color: var(--text-secondary);
+    transition: max-height 0.3s ease, padding 0.3s ease;
+}
+.guide-body.expanded {
+    max-height: 2000px;
+    padding: 0.75rem;
+    border-top: 1px solid var(--border-glass);
+}
+
+/* ── Error text ─────────────────────────────────────────────────── */
+.error {
+    color: var(--error);
+}
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .learn-layout {
+        flex-direction: column;
+    }
+    .learn-sidebar {
+        width: 100%;
+        min-width: unset;
+        max-height: 200px;
+        border-right: none;
+        border-bottom: 1px solid var(--border-glass);
+    }
+    .session-list {
+        max-height: 120px;
+    }
+    .learn-main {
+        padding: 1rem;
+    }
+    .study-chat {
+        height: 40vh;
+    }
+    .mastery-overview {
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+    .mastery-skill-name {
+        width: 100px;
+        min-width: 100px;
+    }
+}

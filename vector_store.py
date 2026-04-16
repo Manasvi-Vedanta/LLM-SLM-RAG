@@ -156,3 +156,50 @@ def retrieve(
         )
 
     return RetrievalResult(in_scope=in_scope, chunks=chunks, scores=scores)
+
+
+# ── per-session vector store management ──────────────────────────────
+
+def _session_dir(session_id: str) -> Path:
+    """Return the persist directory for a session-specific FAISS index."""
+    return config.SESSION_VECTORSTORE_DIR / session_id
+
+
+def session_vectorstore_exists(session_id: str) -> bool:
+    """Check if a session-specific FAISS index exists on disk."""
+    d = _session_dir(session_id)
+    return (d / "index.faiss").exists()
+
+
+def build_session_vectorstore(
+    session_id: str,
+    chunks: List[Document],
+    model_name: str | None = None,
+) -> FAISS:
+    """Build and persist a FAISS index for a single session."""
+    persist_dir = _session_dir(session_id)
+    logger.info("Building session vectorstore '%s' (%d chunks)", session_id, len(chunks))
+    return build_vectorstore(chunks, persist_dir=persist_dir, model_name=model_name)
+
+
+def load_session_vectorstore(
+    session_id: str,
+    model_name: str | None = None,
+) -> FAISS:
+    """Load a previously persisted session-specific FAISS index."""
+    persist_dir = _session_dir(session_id)
+    if not session_vectorstore_exists(session_id):
+        raise FileNotFoundError(
+            f"No vectorstore found for session '{session_id}' at {persist_dir}"
+        )
+    logger.info("Loading session vectorstore '%s'", session_id)
+    return load_vectorstore(persist_dir=persist_dir, model_name=model_name)
+
+
+def delete_session_vectorstore(session_id: str) -> None:
+    """Delete a session-specific FAISS index from disk."""
+    import shutil
+    persist_dir = _session_dir(session_id)
+    if persist_dir.exists():
+        shutil.rmtree(persist_dir)
+        logger.info("Deleted session vectorstore '%s'", session_id)

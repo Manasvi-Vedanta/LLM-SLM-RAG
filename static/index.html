@@ -24,6 +24,7 @@
             <a href="/login" class="btn btn-ghost" id="nav-login">Log In</a>
             <a href="/signup" class="btn btn-primary" id="nav-signup">Sign Up</a>
             <!-- Shown when logged in -->
+            <a href="/learn" class="btn btn-ghost" id="nav-learn" style="display:none;">Learn</a>
             <a href="/chat" class="btn btn-primary" id="nav-chat" style="display:none;">Open Chat</a>
             <a href="#" class="btn btn-ghost" id="nav-logout" style="display:none;">Log Out</a>
         </div>
@@ -97,6 +98,7 @@
         if (isAuthenticated()) {
             document.getElementById('nav-login').style.display = 'none';
             document.getElementById('nav-signup').style.display = 'none';
+            document.getElementById('nav-learn').style.display = '';
             document.getElementById('nav-chat').style.display = '';
             document.getElementById('nav-logout').style.display = '';
             document.getElementById('hero-cta').textContent = 'Open Chat';

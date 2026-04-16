@@ -3,8 +3,10 @@ ingestion.py
 ------------
 Responsible for:
   1. Loading PDF documents from the Dataset folder.
-  2. Splitting them into overlapping text chunks.
-  3. Returning a list of LangChain Document objects ready for embedding.
+  2. Loading raw text content (guides, scraped web pages).
+  3. Loading transcript files.
+  4. Splitting them into overlapping text chunks.
+  5. Returning a list of LangChain Document objects ready for embedding.
 """
 
 from __future__ import annotations
@@ -89,3 +91,72 @@ def ingest(directory: Path | None = None) -> List[Document]:
     """Convenience wrapper: load PDFs → chunk → return chunks."""
     docs = load_pdfs(directory)
     return chunk_documents(docs)
+
+
+# ──────────────────────────────────────────────
+# Text content loader (guides, scraped web pages)
+# ──────────────────────────────────────────────
+
+def load_text_content(text: str, metadata: dict | None = None) -> List[Document]:
+    """Wrap a raw text string into LangChain Document(s).
+
+    Parameters
+    ----------
+    text : str
+        Raw text content (e.g. comprehensive_guides, scraped web page).
+    metadata : dict, optional
+        Metadata to attach (source_type, skill_label, etc.).
+
+    Returns
+    -------
+    List[Document]
+        A single-element list containing the Document.
+        Returns empty list if text is blank.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    metadata = metadata or {}
+    doc = Document(page_content=text, metadata=metadata)
+    logger.debug("Loaded text content (%d chars, source_type=%s)",
+                 len(text), metadata.get("source_type", "unknown"))
+    return [doc]
+
+
+# ──────────────────────────────────────────────
+# Transcript file loader
+# ──────────────────────────────────────────────
+
+def load_transcript(transcript_path: Path, metadata: dict | None = None) -> List[Document]:
+    """Load a transcript .txt file into a LangChain Document.
+
+    Parameters
+    ----------
+    transcript_path : Path
+        Path to the transcript file.
+    metadata : dict, optional
+        Metadata to attach (source_type, video_title, url, etc.).
+
+    Returns
+    -------
+    List[Document]
+        A single-element list, or empty if the file is missing/empty.
+    """
+    transcript_path = Path(transcript_path)
+    if not transcript_path.exists():
+        logger.warning("Transcript file not found: %s", transcript_path)
+        return []
+
+    text = transcript_path.read_text(encoding="utf-8").strip()
+    if not text:
+        logger.warning("Empty transcript file: %s", transcript_path)
+        return []
+
+    metadata = metadata or {}
+    metadata.setdefault("source_type", "transcript")
+    metadata.setdefault("source", transcript_path.name)
+
+    doc = Document(page_content=text, metadata=metadata)
+    logger.info("Loaded transcript (%d chars) from %s", len(text), transcript_path.name)
+    return [doc]

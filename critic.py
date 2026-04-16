@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import config
+import llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,18 @@ class BaseCritic(ABC):
     @abstractmethod
     def format_answer(self, question: str, excerpt: str) -> str:
         """Restructure a validated excerpt into a clean, readable answer."""
+        ...
+
+    @abstractmethod
+    def generate_questions(self, excerpt: str, skill_label: str,
+                           difficulty: str, n: int) -> list[dict]:
+        """Generate quiz questions from an excerpt."""
+        ...
+
+    @abstractmethod
+    def evaluate_answer(self, question: str, user_answer: str,
+                        reference_excerpt: str) -> dict:
+        """Grade a user's free-text answer against a reference excerpt."""
         ...
 
 
@@ -279,6 +292,108 @@ Rules:
         raw = self._call_with_retry(prompt)
         return _clean_formatted_answer(raw)
 
+    # ── question generation ──────────────────────────────────────────
+    _GENERATE_QUESTIONS_PROMPT = """\
+You are an expert quiz creator for an educational platform.
+
+### TASK
+Generate exactly {n} quiz questions based on the excerpt below.
+The questions should test understanding of "{skill_label}" at {difficulty} level.
+
+Create a mix of question types:
+- MCQ (multiple choice with 4 options, one correct)
+- OPEN (open-ended, short answer)
+
+### EXCERPT
+{excerpt}
+
+### OUTPUT FORMAT
+Return a JSON array of question objects. Each object must have:
+{{
+  "question_text": "<the question>",
+  "type": "mcq" or "open",
+  "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}} (only for mcq, null for open),
+  "correct_answer": "<letter for mcq, or short answer text for open>",
+  "difficulty": "{difficulty}",
+  "explanation": "<why this is the correct answer>",
+  "reference_text": "<the specific part of the excerpt the question is about — include any code, formula, or passage the student needs to see to answer>"
+}}
+
+Rules:
+* Questions MUST be answerable from the excerpt
+* MCQ distractors should be plausible but clearly wrong
+* Open-ended answers should be concise (1-3 sentences)
+* NEVER use phrases like "from the excerpt", "in the passage above", "from the code below", "according to the text". Instead, if a question depends on specific code, a formula, or a text passage, include that material in the "reference_text" field and write the question as if the reference_text will be shown alongside it
+* ONLY output the JSON array. No extra text.
+
+### YOUR JSON RESPONSE:
+"""
+
+    def generate_questions(self, excerpt: str, skill_label: str,
+                           difficulty: str = "medium", n: int = 3) -> list[dict]:
+        prompt = self._GENERATE_QUESTIONS_PROMPT.format(
+            excerpt=excerpt, skill_label=skill_label,
+            difficulty=difficulty, n=n,
+        )
+        raw = self._call_with_retry(prompt)
+        try:
+            result = llm_service.parse_json_response(raw)
+            if isinstance(result, list):
+                return result
+            return result.get("questions", [result])
+        except (ValueError, AttributeError):
+            logger.warning("Failed to parse generated questions: %s", raw[:200])
+            return []
+
+    # ── answer evaluation ────────────────────────────────────────────
+    _EVALUATE_ANSWER_PROMPT = """\
+You are an expert educational assessor.
+
+### TASK
+Evaluate a student's answer to a quiz question by comparing it against
+the reference material.
+
+### QUESTION
+{question}
+
+### STUDENT'S ANSWER
+{user_answer}
+
+### REFERENCE EXCERPT
+{reference_excerpt}
+
+### OUTPUT FORMAT
+Return a JSON object with exactly these keys:
+{{"score": <int 0-100>, "feedback": "<2-3 sentences of constructive feedback>"}}
+
+Scoring guide:
+* 90-100: Excellent — demonstrates thorough understanding
+* 70-89: Good — mostly correct with minor gaps
+* 50-69: Partial — shows some understanding but missing key points
+* 25-49: Weak — significant misunderstanding or incomplete
+* 0-24: Incorrect — answer is wrong or irrelevant
+
+Rules:
+* Be fair but rigorous
+* Focus feedback on what was right, what was wrong, and what to review
+* ONLY output the JSON object. No extra text.
+
+### YOUR JSON RESPONSE:
+"""
+
+    def evaluate_answer(self, question: str, user_answer: str,
+                        reference_excerpt: str) -> dict:
+        prompt = self._EVALUATE_ANSWER_PROMPT.format(
+            question=question, user_answer=user_answer,
+            reference_excerpt=reference_excerpt,
+        )
+        raw = self._call_with_retry(prompt)
+        try:
+            return llm_service.parse_json_response(raw)
+        except ValueError:
+            logger.warning("Failed to parse answer evaluation: %s", raw[:200])
+            return {"score": 0, "feedback": "Evaluation failed — could not parse LLM output."}
+
 
 # ── Gemma implementation (local SLM via Ollama) ──────────────────────
 class GemmaCritic(BaseCritic):
@@ -309,42 +424,14 @@ class GemmaCritic(BaseCritic):
 
     # ── Ollama REST call ──────────────────────────────────────────────
     def _call_ollama(self, prompt: str, model: str | None = None) -> str:
-        """Call the Ollama /api/generate endpoint with retry logic.
-
-        Parameters
-        ----------
-        model : str, optional
-            Override the model name (e.g. use base model for formatting).
-        """
-        import requests  # lazily imported so non-Gemma users don't need it
-
-        url = f"{self.base_url}/api/generate"
-        payload = {
-            "model": model or self.model_name,
-            "prompt": prompt,
-            "stream": False,
-        }
-
-        for attempt in range(1, self._max_retries + 1):
-            try:
-                resp = requests.post(url, json=payload, timeout=120)
-                resp.raise_for_status()
-                return resp.json()["response"].strip()
-            except Exception as exc:
-                if attempt < self._max_retries:
-                    wait = self._retry_base_wait * attempt
-                    logger.warning(
-                        "Ollama call failed (attempt %d/%d): %s  – retrying in %ds",
-                        attempt, self._max_retries, exc, wait,
-                    )
-                    time.sleep(wait)
-                else:
-                    raise RuntimeError(
-                        f"Ollama ({model or self.model_name}) failed after "
-                        f"{self._max_retries} attempts: {exc}"
-                    ) from exc
-        # unreachable, but keeps type-checkers happy
-        return ""
+        """Call the Ollama /api/generate endpoint via shared llm_service."""
+        return llm_service.call_ollama(
+            prompt,
+            model=model or self.model_name,
+            base_url=self.base_url,
+            max_retries=self._max_retries,
+            retry_base_wait=self._retry_base_wait,
+        )
 
     def _call_with_retry(self, prompt: str) -> str:
         """Call using the fine-tuned critic model."""
@@ -431,8 +518,39 @@ ANSWER:
         prompt = self._FORMAT_PROMPT.format(question=question, excerpt=excerpt)
         # Use the base Gemma model for formatting — the fine-tuned critic
         # model is trained to output JSON validation, not prose.
-        raw = self._call_ollama(prompt, model="gemma3:4b")
+        raw = self._call_ollama(prompt, model=config.OLLAMA_BASE_MODEL)
         return _clean_formatted_answer(raw)
+
+    # ── question generation (uses base model) ────────────────────────
+    def generate_questions(self, excerpt: str, skill_label: str,
+                           difficulty: str = "medium", n: int = 3) -> list[dict]:
+        prompt = GeminiCritic._GENERATE_QUESTIONS_PROMPT.format(
+            excerpt=excerpt, skill_label=skill_label,
+            difficulty=difficulty, n=n,
+        )
+        raw = self._call_ollama(prompt, model=config.OLLAMA_BASE_MODEL)
+        try:
+            result = llm_service.parse_json_response(raw)
+            if isinstance(result, list):
+                return result
+            return result.get("questions", [result])
+        except (ValueError, AttributeError):
+            logger.warning("Failed to parse generated questions: %s", raw[:200])
+            return []
+
+    # ── answer evaluation (uses base model) ──────────────────────────
+    def evaluate_answer(self, question: str, user_answer: str,
+                        reference_excerpt: str) -> dict:
+        prompt = GeminiCritic._EVALUATE_ANSWER_PROMPT.format(
+            question=question, user_answer=user_answer,
+            reference_excerpt=reference_excerpt,
+        )
+        raw = self._call_ollama(prompt, model=config.OLLAMA_BASE_MODEL)
+        try:
+            return llm_service.parse_json_response(raw)
+        except ValueError:
+            logger.warning("Failed to parse answer evaluation: %s", raw[:200])
+            return {"score": 0, "feedback": "Evaluation failed — could not parse LLM output."}
 
 
 # ── Mock implementation (offline / tests) ────────────────────────────
@@ -462,6 +580,26 @@ class MockCritic(BaseCritic):
 
     def format_answer(self, question: str, excerpt: str) -> str:
         return f"**Definition:**\n{excerpt[:300]}"
+
+    def generate_questions(self, excerpt: str, skill_label: str,
+                           difficulty: str = "medium", n: int = 3) -> list[dict]:
+        questions = []
+        for i in range(n):
+            q_type = "mcq" if i < n // 2 + 1 else "open"
+            q = {
+                "question_text": f"[MockCritic] Sample {q_type} question {i+1} about {skill_label}",
+                "type": q_type,
+                "options": {"A": "Option A", "B": "Option B", "C": "Option C", "D": "Option D"} if q_type == "mcq" else None,
+                "correct_answer": "A" if q_type == "mcq" else f"Sample answer about {skill_label}",
+                "difficulty": difficulty,
+                "explanation": "[MockCritic] This is a placeholder question.",
+            }
+            questions.append(q)
+        return questions
+
+    def evaluate_answer(self, question: str, user_answer: str,
+                        reference_excerpt: str) -> dict:
+        return {"score": 75, "feedback": "[MockCritic] Placeholder evaluation."}
 
 
 # ── factory ──────────────────────────────────────────────────────────
