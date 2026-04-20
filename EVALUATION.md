@@ -11,13 +11,39 @@ of analysis:
 
 | Tier | Unit | Experiments | Runnable harness |
 |------|------|-------------|------------------|
-| T1 | **Critic model** (fine-tuned SLM) | E1–E4 | `evaluate.py`, `benchmark_v123.py`, `evaluation/critic_calibration.py` |
-| T2 | **RAG pipeline** (Actor + Critic + gates) | E5–E7 | `evaluation/rag_faithfulness.py`, `evaluation/retrieval_metrics.py` |
+| T1 | **Critic model** (fine-tuned SLM) | E1–E4 | `evaluate.py`, `evaluation/tier1_critic_benchmark.py` |
+| T2 | **RAG pipeline** (Actor + Critic + gates) | E5–E7 | `evaluation/rag_self_faithfulness.py` |
 | T3 | **Adaptive analytics modules** (offline, synthetic) | E8–E11 | `evaluation/synthetic_user_sim.py` |
 | T4 | **End-to-end human learning outcomes** | E12–E14 | IRB-gated user study |
 
 Each experiment declares: **RQ** (research question), **H** (hypothesis),
 **metric**, **design**, **statistics**, and **success criterion**.
+
+### What you can run **today** (no extra labelling, no IRB)
+
+| Experiment | Runnable now? | Command | Bottleneck |
+|------------|---------------|---------|------------|
+| **E1** accuracy / F1 / precision / recall | ✅ yes (n = 25) | `python evaluation/tier1_critic_benchmark.py --backends gemma gemini` | small n — use bootstrap CI, paper must state "pilot sample" until held-out set is labelled |
+| **E2** ECE / Brier / reliability table | ✅ yes (n = 25) | same as above | same |
+| **E3** adversarial scope robustness | ⚠️ partial | same as above (only 5 OOS items) | need 100 near-topic distractors |
+| **E4** κ + McNemar agreement | ✅ yes, with ≥ 2 backends | same as above | requires Gemini key + Ollama up |
+| **E4b** Qwen head-to-head | 🕒 waiting on Qwen LoRA | `tier1_critic_benchmark.py --backends gemma qwen gemini` after fine-tune | must train Qwen on `training_data_v3.jsonl` first |
+| **E5** retrieval recall@k, nDCG | ❌ blocked | needs labelled `(question, gold_chunk_id)` pairs | label 150 pairs from `Dataset/` |
+| **E6** self-audited faithfulness | ✅ yes (proxy) | `python evaluation/rag_self_faithfulness.py --auditor gemma` | same critic judges itself — declare as self-audit in paper |
+| **E6'** cross-audited faithfulness | ✅ yes (stronger) | `python evaluation/rag_self_faithfulness.py --auditor gemini` | Gemini as external judge, critic-on-gemma as defendant |
+| **E7** critic-on vs critic-off blind human | ❌ needs humans | — | 3 raters, Krippendorff's α |
+| **E8–E11** analytics invariants | ✅ yes, CI-safe | `python evaluation/synthetic_user_sim.py` | — |
+| **E12–E14** learning-outcome A/B | ❌ blocked | — | IRB, N ≥ 40 per arm |
+
+Executive summary of what is **runnable right now** against the
+currently deployed `gemma3-critic-v3-new` + Gemini fallback stack:
+
+- **E1 + E2 + E4 + E6/E6'** on the existing 25-question test bank
+  (20 in-scope Python/Data-Science + 5 adversarial OOS).
+- **E8–E11** offline analytics (all passing as of commit `bc0985d`).
+
+What blocks the other tiers is **data labelling** (E3, E5), **IRB**
+(E12–E14), or **model training** (E4b); none is a code gap.
 
 ---
 
@@ -308,16 +334,36 @@ whether the "efficient fine-tuning" story holds up.
 ## Running the offline tiers
 
 ```bash
-# Tier 1
-python evaluate.py --backends gemini gemma --out results_t1.json
-python evaluation/critic_calibration.py --model gemma3-critic-v3-new
+# Tier 1 — side-by-side descriptive metrics (existing, unchanged)
+python evaluate.py --backends gemini gemma --out results_t1_legacy.json
 
-# Tier 2
-python evaluation/retrieval_metrics.py
-python evaluation/rag_faithfulness.py
+# Tier 1 — publication-grade metrics (F1 + ECE + Brier + Cohen's κ + McNemar)
+python evaluation/tier1_critic_benchmark.py --backends gemma gemini
 
-# Tier 3 (deterministic, cheap, safe for CI)
+# Tier 2 — self-audited faithfulness (gemma judges gemma)
+python evaluation/rag_self_faithfulness.py --critic gemma --auditor gemma
+
+# Tier 2 — cross-audited faithfulness (gemini judges gemma) — stronger
+python evaluation/rag_self_faithfulness.py --critic gemma --auditor gemini
+
+# Tier 3 — deterministic, CI-safe
 python evaluation/synthetic_user_sim.py
 ```
 
 Tier 4 requires IRB clearance and is run outside CI.
+
+### Qwen drop-in (planned)
+
+When `qwen-critic-v1` (LoRA-fine-tuned on the same
+`training_data_v3.jsonl` as Gemma-v3) is registered in `critic.py` via
+`create_critic("qwen")`, re-run the Tier-1 command with three backends:
+
+```bash
+python evaluation/tier1_critic_benchmark.py --backends gemma qwen gemini
+```
+
+The same `tier1_report.json` will populate a third backend column and
+the pairwise agreement section will report κ for (gemma, qwen),
+(gemma, gemini), (qwen, gemini). This is exactly the ablation the paper
+needs to separate *architecture effect* (Qwen vs Gemma) from *training
+data effect* (both on the same LoRA data).
