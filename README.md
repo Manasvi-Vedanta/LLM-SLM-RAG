@@ -978,7 +978,7 @@ The critic model evolved across three training iterations. The v1 → v2 jump so
 - Raise similarity threshold to 0.40 to improve out-of-scope filtering
 - Scale training data to 1000+ examples with more diverse out-of-scope questions
 - Multi-round fine-tuning with DPO (Direct Preference Optimisation)
-- Frontend surfacing of the new analytics (Bloom badges on quiz cards, citation pills in study chat, calibration scatter-plot, cognitive-load heatmap, review-queue dashboard) — endpoints are live, UI is next
+- Full-text faithfulness audit UI (per-sentence chunk attribution overlay on the study-chat answer)
 - WebSocket streaming for real-time token-by-token responses
 - User file upload through the web UI
 - Automated faithfulness audit — run `critic.evaluate_answer` on every answer sentence against its cited chunks, surface drift as a confidence penalty
