@@ -399,6 +399,35 @@ Both backends share identical validation and fallback prompts. The `create_criti
 
 ---
 
+## Evaluation Protocol
+
+A full publication-grade evaluation plan — research questions, hypotheses,
+metrics, statistics, ablation matrix, datasets, and threats-to-validity —
+is documented in [`EVALUATION.md`](EVALUATION.md). It organises experiments
+in four tiers:
+
+| Tier | Unit | Examples | Runnable |
+|------|------|----------|----------|
+| 1 | Fine-tuned critic SLM | calibration (ECE), F1 vs Gemini, κ agreement, Qwen head-to-head | `evaluate.py`, `evaluation/critic_calibration.py` |
+| 2 | End-to-end RAG pipeline | retrieval recall@k, per-sentence faithfulness, critic-on-vs-off | `evaluation/rag_faithfulness.py` |
+| 3 | Offline analytics mechanics | Ebbinghaus monotonicity, scheduler closed-form, ZPD invariants, Pearson recovery | `evaluation/synthetic_user_sim.py` |
+| 4 | End-to-end human outcomes | A/B on retention, ZPD-lift, calibration feedback loop | IRB user study |
+
+Tier 3 is deterministic, LLM-free, and CI-safe — run it before every
+commit that touches `mastery_tracker.py`, `review_scheduler.py`,
+`question_generator.py`, or `knowledge_transfer.py`:
+
+```bash
+python evaluation/synthetic_user_sim.py -v
+```
+
+The **Qwen critic head-to-head** slot (E4b in `EVALUATION.md`) is
+pre-specified so that a future LoRA fine-tune of Qwen on
+`training_data_v3.jsonl` slots into the same comparison table without
+re-designing the experiment.
+
+---
+
 ## Adaptive Learning Analytics — Theory
 
 Beyond the core mastery tracker and path adapter, the project ships seven research-grade analytics modules grounded in classical cognitive-science and learning-analytics literature. Each is a self-contained module that can be called from CLI, notebooks, or HTTP endpoints.

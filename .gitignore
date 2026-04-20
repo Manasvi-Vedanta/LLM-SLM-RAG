@@ -40,3 +40,4 @@ _*.py
 # OS specific
 .DS_Store
 Thumbs.db
+evaluation/results/
