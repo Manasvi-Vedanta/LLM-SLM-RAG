@@ -649,10 +649,13 @@ def create_critic(backend: str | None = None) -> BaseCritic:
     if backend == "gemma":
         return GemmaCritic()
 
+    if backend == "qwen":
+        return GemmaCritic(model_name=config.OLLAMA_QWEN_MODEL)
+
     if backend == "mock":
         return MockCritic(fixed_confidence=90.0)
 
     raise ValueError(
         f"Unknown CRITIC_BACKEND: {backend!r}.  "
-        f"Supported: 'gemini', 'gemma', 'mock'."
+        f"Supported: 'gemini', 'gemma', 'qwen', 'mock'."
     )

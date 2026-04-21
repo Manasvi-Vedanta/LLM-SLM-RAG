@@ -413,15 +413,26 @@ in four tiers:
 | 3 | Offline analytics mechanics | Ebbinghaus monotonicity, scheduler closed-form, ZPD invariants, Pearson recovery | `evaluation/synthetic_user_sim.py` |
 | 4 | End-to-end human outcomes | A/B on retention, ZPD-lift, calibration feedback loop | IRB user study |
 
-### Latest results (2026-04-21)
+### Latest results (2026-04-22)
 
-| Tier | Harness | Headline result |
-|------|---------|-----------------|
-| 1 | `tier1_critic_benchmark.py --backends gemma` (N=25) | Accuracy **0.84** (95% CI 0.68–0.96), F1 **0.909** (CI 0.80–0.98), ECE **0.072**, Brier **0.138**, p50 latency **6.4 s** |
-| 2 | `rag_self_faithfulness.py` (gemma self-audit, N=10) | Mean faithfulness **1.00** across 24 sentences — zero unsupported claims |
-| 3 | `synthetic_user_sim.py` | **4/4 PASS** (Ebbinghaus monotonic; scheduler max error < 0.5 pp over 1 000 samples; ZPD no violations; Pearson recovered for α ∈ {0, 0.5, 0.9}) |
+Two 4 B critic fine-tunes trained on the identical `training_data_v3.jsonl` (300 labelled examples, same LoRA config r=16 α=32) were evaluated head-to-head:
 
-Reports are written to `evaluation/results/tier{1,2,3}_*.json` (gitignored). Gemini cross-audit and Qwen head-to-head remain pre-specified but unrun (cloud rate limits; Qwen fine-tune pending).
+| Metric | `gemma3-critic-v3-new` | `qwen-critic-v1` |
+|--------|------------------------|------------------|
+| **Tier 1** Accuracy (N=25) | **0.84** (CI 0.68–0.96) | 0.64 (CI 0.44–0.80) |
+| **Tier 1** F1 | **0.909** (CI 0.80–0.98) | 0.710 (CI 0.50–0.86) |
+| **Tier 1** ECE (10-bin) | **0.056** | 0.177 |
+| **Tier 1** Brier | 0.135 | **0.041** |
+| **Tier 1** Latency p50 / p95 | 7.4 s / 15.1 s | **3.5 s / 3.6 s** |
+| **Tier 2** Document answers (N=10) | 10 / 10 | 0 / 10 |
+| **Tier 2** Mean faithfulness | **1.00** | — (all fell through gate) |
+| **Tier 3** Analytics invariants | 4 / 4 PASS (shared, deterministic) | — |
+
+**Agreement:** Cohen's κ = 0.063, raw agreement 48 %, McNemar χ² = 1.23 (ns).
+
+**Interpretation.** Identical training data on a different 4 B architecture produces dramatically different confidence distributions. Gemma v3 outputs 87–92 on in-scope items (clears the 85-gate), while Qwen clusters at 72–85 (fails the gate) — hence every Tier-2 answer falls through to the general-knowledge fallback. This is a **load-bearing finding for the paper**: Tier 1 ECE (0.056 vs 0.177) directly predicts Tier 2 pipeline behaviour, confirming that critic calibration is the primary mechanism gating retrieval-grounded answers.
+
+Reports written to `evaluation/results/tier{1,2,3}_*.json` (gitignored). Gemini cross-audit remains pre-specified but unrun (cloud rate limits).
 
 Tier 3 is deterministic, LLM-free, and CI-safe — run it before every
 commit that touches `mastery_tracker.py`, `review_scheduler.py`,

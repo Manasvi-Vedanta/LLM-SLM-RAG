@@ -78,6 +78,7 @@ GEMINI_FALLBACK_MODELS = [
 # Use "gemma3-critic"   for the fine-tuned model (after running finetune.py)
 OLLAMA_MODEL_NAME = "gemma3-critic-v3-new"            # fine-tuned: validation only
 OLLAMA_BASE_MODEL = "gemma3:4b"                        # base model: all generation tasks
+OLLAMA_QWEN_MODEL = "qwen-critic-v1"                   # Qwen3-4B fine-tune for head-to-head
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # ──────────────────────────────────────────────

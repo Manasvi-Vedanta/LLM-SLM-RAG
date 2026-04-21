@@ -57,12 +57,15 @@ logger = logging.getLogger(__name__)
 # Prompt formatting  (must match Gemma 3 instruct chat template)
 # =====================================================================
 
-def format_chat(prompt: str, completion: str) -> str:
-    """
-    Wrap a (prompt, completion) pair in the Gemma 3 instruct chat template.
-
-    Gemma 3 uses ``<start_of_turn>user`` / ``<start_of_turn>model`` markers.
-    """
+def format_chat(prompt: str, completion: str, template: str = "gemma") -> str:
+    """Wrap (prompt, completion) in the selected instruct chat template."""
+    if template == "qwen":
+        # ChatML (Qwen2.5 / Qwen3 / Qwen3.5)
+        return (
+            f"<|im_start|>user\n{prompt}<|im_end|>\n"
+            f"<|im_start|>assistant\n{completion}<|im_end|>"
+        )
+    # Gemma 3 default
     return (
         f"<start_of_turn>user\n"
         f"{prompt}<end_of_turn>\n"
@@ -71,7 +74,7 @@ def format_chat(prompt: str, completion: str) -> str:
     )
 
 
-def load_dataset_from_jsonl(path: Path) -> List[Dict]:
+def load_dataset_from_jsonl(path: Path, template: str = "gemma") -> List[Dict]:
     """Load the JSONL file and convert to HuggingFace Dataset-compatible dicts."""
     records: List[Dict] = []
     with open(path, encoding="utf-8") as f:
@@ -80,7 +83,7 @@ def load_dataset_from_jsonl(path: Path) -> List[Dict]:
             if not line:
                 continue
             obj = json.loads(line)
-            text = format_chat(obj["prompt"], obj["completion"])
+            text = format_chat(obj["prompt"], obj["completion"], template=template)
             records.append({"text": text})
     logger.info("Loaded %d training examples from %s", len(records), path)
     return records
@@ -175,7 +178,7 @@ def run_training(args: argparse.Namespace) -> Path:
         logger.error("Run  python generate_training_data.py  first.")
         sys.exit(1)
 
-    records = load_dataset_from_jsonl(data_path)
+    records = load_dataset_from_jsonl(data_path, template=args.chat_template)
     if len(records) < 10:
         logger.warning(
             "Only %d examples - results may be poor.  "
@@ -389,6 +392,10 @@ def main() -> None:
     )
 
     # -- LoRA --
+    parser.add_argument(
+        "--chat-template", type=str, default="gemma", choices=["gemma", "qwen"],
+        help="Instruct chat template (gemma: <start_of_turn>, qwen: ChatML).",
+    )
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank.")
     parser.add_argument("--lora-alpha", type=int, default=16, help="LoRA alpha.")
     parser.add_argument("--lora-dropout", type=float, default=0.0, help="LoRA dropout.")
