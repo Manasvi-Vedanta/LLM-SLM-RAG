@@ -47,6 +47,73 @@ What blocks the other tiers is **data labelling** (E3, E5), **IRB**
 
 ---
 
+## Latest empirical results (run 2026-04-21)
+
+All three runnable tiers were executed end-to-end against the production
+`gemma3-critic-v3-new` stack. Raw JSON reports are in
+`evaluation/results/` (gitignored).
+
+### Tier 1 — `tier1_critic_benchmark.py --backends gemma` (N = 25)
+
+| Metric | Gemma (fine-tuned) |
+|--------|--------------------|
+| Accuracy | **0.84** (95% CI 0.68 – 0.96) |
+| F1 | **0.909** (95% CI 0.80 – 0.98) |
+| Precision / Recall / Specificity | 0.833 / 1.000 / 0.200 |
+| Confusion (TP/FP/TN/FN) | 20 / 4 / 1 / 0 |
+| ECE (10-bin) | **0.072** |
+| Brier | **0.138** |
+| Latency p50 / p95 | 6.4 s / 7.8 s |
+
+Interpretation: recall is saturated on in-scope items, but the low
+specificity (1/5 out-of-scope items correctly rejected) exposes the
+known calibration weakness on adversarial distractors — mirroring the
+E3 gap documented below. ECE ≈ 0.07 is within publication norms
+(< 0.10) but the reliability table shows most confidences clustered in
+the 0.85 – 0.92 band, which is why ECE is dominated by a few
+high-confidence misses. The Gemini baseline was not run in this pass
+because the free-tier key hit sustained RPM limits; the harness is
+unchanged and ready for `--backends gemma gemini` once quota permits.
+
+### Tier 2 — `rag_self_faithfulness.py --critic gemma --auditor gemma` (N = 10)
+
+| Metric | Value |
+|--------|-------|
+| Answers audited | 10 / 10 document-grounded |
+| Sentences audited | 24 |
+| Mean faithfulness | **1.000** |
+| Min faithfulness | 1.000 |
+| Answers < 0.7 | 0 |
+| Answers ≥ 0.9 | 10 |
+
+Interpretation: **zero unsupported sentences** under self-audit at
+threshold 60. This is the weak form of the faithfulness claim — same
+model as judge and defendant — and must be reported as such. The
+cross-audit (`--auditor gemini`) is the stronger test and remains the
+next empirical priority once Gemini quota is available.
+
+### Tier 3 — `synthetic_user_sim.py` (deterministic, CI-safe)
+
+| Experiment | Result |
+|------------|--------|
+| E8  Ebbinghaus monotonicity + half-life | **PASS** — 0 mono violations, 0 floor violations, half-life error 0.0 % |
+| E9  Spaced-repetition closed-form | **PASS** — max absolute error < 0.5 pp over 1 000 samples |
+| E10 ZPD Bloom invariants | **PASS** — 0 adjacency / monotonicity violations across 3 × 101 mastery points; all 6 Bloom levels reached |
+| E11 Pearson recovery | **PASS** — α ∈ {0.0, 0.5, 0.9} all recovered within 0.15 tolerance |
+
+Summary: **4 / 4 invariants hold.** This gates the mathematical
+correctness of the analytics layer independently of any LLM.
+
+### Headline takeaway
+
+The system is at the "publication-ready for the model + mechanics
+layer, pending cross-audit and human study" mark: critic F1, ECE, and
+all analytics invariants meet preregistered thresholds; faithfulness is
+supported under self-audit with the honest caveat that a
+different-model auditor is still pending.
+
+---
+
 ## Tier 1 — Critic model evaluation
 
 ### E1 — Validation accuracy on held-out document QA

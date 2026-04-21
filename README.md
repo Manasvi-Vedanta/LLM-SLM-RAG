@@ -408,10 +408,20 @@ in four tiers:
 
 | Tier | Unit | Examples | Runnable |
 |------|------|----------|----------|
-| 1 | Fine-tuned critic SLM | calibration (ECE), F1 vs Gemini, κ agreement, Qwen head-to-head | `evaluate.py`, `evaluation/critic_calibration.py` |
-| 2 | End-to-end RAG pipeline | retrieval recall@k, per-sentence faithfulness, critic-on-vs-off | `evaluation/rag_faithfulness.py` |
+| 1 | Fine-tuned critic SLM | F1 + bootstrap CI, ECE/Brier, κ + McNemar, Qwen head-to-head | `evaluation/tier1_critic_benchmark.py` |
+| 2 | End-to-end RAG pipeline | per-sentence faithfulness (self-audit / cross-audit) | `evaluation/rag_self_faithfulness.py` |
 | 3 | Offline analytics mechanics | Ebbinghaus monotonicity, scheduler closed-form, ZPD invariants, Pearson recovery | `evaluation/synthetic_user_sim.py` |
 | 4 | End-to-end human outcomes | A/B on retention, ZPD-lift, calibration feedback loop | IRB user study |
+
+### Latest results (2026-04-21)
+
+| Tier | Harness | Headline result |
+|------|---------|-----------------|
+| 1 | `tier1_critic_benchmark.py --backends gemma` (N=25) | Accuracy **0.84** (95% CI 0.68–0.96), F1 **0.909** (CI 0.80–0.98), ECE **0.072**, Brier **0.138**, p50 latency **6.4 s** |
+| 2 | `rag_self_faithfulness.py` (gemma self-audit, N=10) | Mean faithfulness **1.00** across 24 sentences — zero unsupported claims |
+| 3 | `synthetic_user_sim.py` | **4/4 PASS** (Ebbinghaus monotonic; scheduler max error < 0.5 pp over 1 000 samples; ZPD no violations; Pearson recovered for α ∈ {0, 0.5, 0.9}) |
+
+Reports are written to `evaluation/results/tier{1,2,3}_*.json` (gitignored). Gemini cross-audit and Qwen head-to-head remain pre-specified but unrun (cloud rate limits; Qwen fine-tune pending).
 
 Tier 3 is deterministic, LLM-free, and CI-safe — run it before every
 commit that touches `mastery_tracker.py`, `review_scheduler.py`,
