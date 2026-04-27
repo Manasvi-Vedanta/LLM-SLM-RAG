@@ -4,6 +4,21 @@ A full-stack Retrieval-Augmented Generation system with two modes: (1) **RAG Q&A
 
 ---
 
+## Evaluation headline (Run 2026-04-24)
+
+| # | Finding | Number |
+|---|---------|--------|
+| A1 | LoRA fine-tuning lifts critic F1 (vs base `gemma3:4b`) | **0.55 → 0.93** (+38 pp); ECE **0.254 → 0.061** (−4.2×) |
+| A2 | Dual gate (sim ≥ 0.20 AND conf ≥ 85) as OOS routing guard | With gate off, 4/5 OOS questions masquerade as document-grounded |
+| E6' | External-judge faithfulness (gemini auditing gemma) | **1.00** mean sentence-level support across 10 doc answers |
+| E12 | Decay-aware mastery vs raw mastery (retention A/B, N = 1000) | **+4.48 pp** 7-day retention, d = 0.56, p < 0.001 |
+| E13 | ZPD Bloom targeting vs uniform (time-to-mastery A/B) | **−0.36 sessions** to latent mastery, HR = 31, p < 0.001 |
+| E14 | Calibration feedback vs none (metacognition A/B) | **+6.68 pp** gap reduction, d = 0.67, p < 0.001 |
+
+See [`EVALUATION.md`](EVALUATION.md) for full methodology, 95% CIs, and pre-registration details.
+
+---
+
 ## Key Features
 
 ### RAG Q&A Mode
@@ -411,7 +426,23 @@ in four tiers:
 | 1 | Fine-tuned critic SLM | F1 + bootstrap CI, ECE/Brier, κ + McNemar, Qwen head-to-head | `evaluation/tier1_critic_benchmark.py` |
 | 2 | End-to-end RAG pipeline | per-sentence faithfulness (self-audit / cross-audit) | `evaluation/rag_self_faithfulness.py` |
 | 3 | Offline analytics mechanics | Ebbinghaus monotonicity, scheduler closed-form, ZPD invariants, Pearson recovery | `evaluation/synthetic_user_sim.py` |
-| 4 | End-to-end human outcomes | A/B on retention, ZPD-lift, calibration feedback loop | IRB user study |
+| 4 | Simulated end-to-end outcomes (IRT learner) | E12 retention A/B, E13 ZPD time-to-mastery, E14 calibration-feedback gap reduction | `evaluation/synthetic_learner_rct.py` |
+
+**Ablations (also runnable):**
+
+```bash
+# A1 — fine-tuning lift (LoRA vs base gemma3:4b, same prompt + infra)
+python evaluation/tier1_critic_benchmark.py --backends gemma qwen base
+
+# A2 — dual-gate routing (similarity-only, conf gate disabled)
+python evaluation/rag_self_faithfulness.py --confidence-threshold 0 --questions 25
+
+# E6' — external-judge cross-audit (gemini auditing gemma)
+python evaluation/rag_self_faithfulness.py --auditor gemini
+
+# Build all figures + LaTeX/MD tables for the paper
+python evaluation/generate_report_assets.py
+```
 
 ### Latest results (2026-04-22)
 

@@ -652,10 +652,15 @@ def create_critic(backend: str | None = None) -> BaseCritic:
     if backend == "qwen":
         return GemmaCritic(model_name=config.OLLAMA_QWEN_MODEL)
 
+    if backend == "base":
+        # A1 ablation: base gemma3:4b with no LoRA adapter — quantifies
+        # the lift provided by fine-tuning alone.
+        return GemmaCritic(model_name=config.OLLAMA_BASE_MODEL)
+
     if backend == "mock":
         return MockCritic(fixed_confidence=90.0)
 
     raise ValueError(
         f"Unknown CRITIC_BACKEND: {backend!r}.  "
-        f"Supported: 'gemini', 'gemma', 'qwen', 'mock'."
+        f"Supported: 'gemini', 'gemma', 'qwen', 'base', 'mock'."
     )

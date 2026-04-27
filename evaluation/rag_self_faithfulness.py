@@ -67,12 +67,16 @@ def split_sentences(text: str) -> List[str]:
 
 
 def audit_answer(pipeline_critic_name: str, auditor_name: str,
-                 questions) -> List[AnswerAudit]:
+                 questions, confidence_threshold: float | None = None) -> List[AnswerAudit]:
     vs = load_vectorstore()
     pipeline = RAGPipeline(
         vectorstore=vs,
         critic=create_critic(pipeline_critic_name),
     )
+    if confidence_threshold is not None:
+        # A2 ablation: override the production confidence gate so we can
+        # measure what faithfulness looks like with similarity-only gating.
+        pipeline.confidence_threshold = confidence_threshold
     auditor = create_critic(auditor_name)
 
     audits: List[AnswerAudit] = []
@@ -146,10 +150,13 @@ def main() -> int:
                     help="Critic used to audit each sentence (self=gemma, external=gemini)")
     ap.add_argument("--questions", type=int, default=10)
     ap.add_argument("--out", default="evaluation/results/tier2_faithfulness.json")
+    ap.add_argument("--confidence-threshold", type=float, default=None,
+                    help="Override pipeline confidence gate (A2 ablation: 0 = similarity-only)")
     args = ap.parse_args()
 
     questions = TEST_QUESTIONS[: args.questions]
-    audits = audit_answer(args.critic, args.auditor, questions)
+    audits = audit_answer(args.critic, args.auditor, questions,
+                          confidence_threshold=args.confidence_threshold)
     summary = summarise(audits)
 
     out = Path(args.out)

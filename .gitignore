@@ -23,6 +23,9 @@ users.db
 # Fine-tuning artifacts (large model files)
 finetuned_model/
 finetuned_model_v2/
+finetuned_model_v3_new/
+finetuned_qwen_v1/
+finetune_qwen.log
 training_data.jsonl
 training_data_v2.jsonl
 evaluation_summary.json
@@ -42,3 +45,16 @@ _*.py
 Thumbs.db
 evaluation/results/
 CLAUDE.md
+Cortex_Sonia_Panel2.pdf
+Model Architecture.png
+REPORT_FULL_CONTENT_DRAFT.md
+REPORT.md
+
+# Generated learning-path artifacts and session caches (regeneratable)
+Corrected Paths/
+session_vectorstores/
+.active_path
+
+# Claude Code local session/state
+.claude/
+2026-*-this-session-is-being-continued-from-a-previous-c.txt
